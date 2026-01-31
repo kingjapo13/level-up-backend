@@ -11,13 +11,15 @@ app = FastAPI()
 @app.post("/upload-video")
 async def upload_video(file: UploadFile = File(...)):
     file_path = os.path.join(UPLOAD_DIR, file.filename)
-
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    analysis = analyze_video(file_path)
+    
     return {
-        "message": "Video uploaded successfully",
-        "filename": file.filename
+        "message": "Video uploaded and analyzed",
+        "filename": file.filename,
+        "analysis": analysis
     }
 
 # Allow VibeCode / frontend access
