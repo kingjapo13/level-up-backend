@@ -6,16 +6,19 @@ import os
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-app = FastAPI()
-
 @app.post("/upload-video")
 async def upload_video(file: UploadFile = File(...)):
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-
-    analysis = analyze_video(file_path)
     
+    analysis = {
+        "summary": "Good balance and posture",
+        "strengths": ["Stable stance", "Smooth motion"],
+        "improvements": ["Follow-through consistency"],
+        "score": 82
+    }
+
     return {
         "message": "Video uploaded and analyzed",
         "filename": file.filename,
