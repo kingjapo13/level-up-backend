@@ -44,4 +44,3 @@ async def analyze_video(file: UploadFile = File(...)):
     }
 
     return analysis_result
-python -m uvicorn main:app --reload
