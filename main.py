@@ -92,12 +92,26 @@ async def upload_video(file: UploadFile = File(...)):
             )
         
         cleanup_old_files(days=7)
-        
-        analysis = {
-            "summary": "Good balance and posture",
-            "strengths": ["Stable stance", "Smooth motion"],
-            "improvements": ["Follow-through consistency"],
-            "score": 82,
+     
+    analysis = {
+            "sport": "basketball",
+            "overall_score": 82,
+            "positives": [
+                "Good balance throughout the movement",
+                "Controlled body position",
+                "Stable stance during release"
+            ],
+            "focus_areas": [
+                "Follow-through consistency",
+                "Foot placement on release",
+                "Elbow alignment"
+            ],
+            "training_plan": [
+                "Form shooting: 50 reps per day",
+                "Balance drills: 10 minutes per session",
+                "Slow-motion shooting reps focusing on follow-through",
+                "Wall sits for leg stability: 3 sets of 30 seconds"
+            ],
             "analyzed_at": datetime.now().isoformat()
         }
         
