@@ -63,28 +63,21 @@ def cleanup_old_files(days: int = 7) -> None:
 
 def process_video_worker(input_path: str, job_id: str, model_dir: str = None, dominant_hand: str = "right"):
     """
-    Background worker that runs the actual analysis. It should produce:
-      - annotated video
-      - analysis JSON
-    The concrete implementation should live in process_video.analyze_video(...) and return metadata (paths).
+    Background worker that runs the actual analysis. It calls process_video.analyze_video(...)
     """
     try:
         JOB_STATUS[job_id] = "processing"
-        # Import here so heavy deps are only loaded in worker context
         try:
             from process_video import analyze_video
         except Exception as e:
-            # If process_video is missing, mark error
             JOB_STATUS[job_id] = f"error: process_video module not found: {e}"
             return
 
         out_dir = os.path.join(RESULTS_DIR, job_id)
         os.makedirs(out_dir, exist_ok=True)
 
-        # analyze_video should be implemented by you to run MediaPipe / classifier and return result paths
         result = analyze_video(input_path, output_dir=out_dir, model_dir=model_dir, dominant_hand=dominant_hand)
 
-        # result expected to be a dict with keys like "annotated_video" and "analysis_json"
         JOB_RESULTS[job_id] = result or {}
         JOB_STATUS[job_id] = "done"
     except Exception as e:
@@ -140,13 +133,11 @@ async def upload_video(file: UploadFile = File(...), background_tasks: Backgroun
         JOB_STATUS[job_id] = "queued"
         JOB_RESULTS.pop(job_id, None)
 
-        # Use FastAPI BackgroundTasks (runs after response) or start a thread as fallback
         if background_tasks is not None:
             background_tasks.add_task(process_video_worker, file_path, job_id, model_dir, dominant_hand)
         else:
             threading.Thread(target=process_video_worker, args=(file_path, job_id, model_dir, dominant_hand), daemon=True).start()
 
-        # cleanup old uploads asynchronously (non-blocking)
         threading.Thread(target=cleanup_old_files, args=(7,), daemon=True).start()
 
         return {
@@ -186,7 +177,6 @@ def job_result(job_id: str):
     if status != "done":
         return {"job_id": job_id, "status": status}
 
-    # job done -> return result metadata
     result = JOB_RESULTS.get(job_id, {})
     return {"job_id": job_id, "status": "done", "result": result}
 
