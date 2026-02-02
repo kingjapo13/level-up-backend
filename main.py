@@ -92,8 +92,8 @@ async def upload_video(file: UploadFile = File(...)):
             )
         
         cleanup_old_files(days=7)
-     
-    analysis = {
+        
+        analysis = {
             "sport": "basketball",
             "overall_score": 82,
             "positives": [
