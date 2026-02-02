@@ -1,3 +1,9 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
+mediapipe==0.10.4
+opencv-python
+numpy
+torch     # if using the LSTM classifier
+joblib    # for label encoder
+ffmpeg-python  # optional helper around ffmpeg
