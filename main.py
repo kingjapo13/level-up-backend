@@ -241,14 +241,4 @@ def health():
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat()
-    }
-```
-
-### 3. **Requirements** (requirements.txt)
-```
-fastapi==0.104.1
-uvicorn==0.24.0
-python-multipart==0.0.6
-opencv-python==4.8.1.78
-mediapipe==0.10.8
-numpy==1.24.3
+   
