@@ -1,8 +1,5 @@
 fastapi
-uvicorn[standard]
 python-multipart
-mediapipe==0.10.4
+mediapipe==0.10.32
 opencv-python
 numpy
-joblib
-torch  # optional; remove if you don't want model inference in container
