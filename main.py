@@ -6,9 +6,18 @@ import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime
+import sys
 import cv2
-import mediapipe as mp
 import numpy as np
+
+# MediaPipe does not support Python 3.13+; require 3.10 or 3.11 for deploy
+if sys.version_info >= (3, 13):
+    raise RuntimeError(
+        "MediaPipe requires Python 3.10 or 3.11. "
+        "Set .python-version to '3.10' or set PYTHON_VERSION=3.10.14 in your Render environment."
+    )
+
+import mediapipe as mp
 
 app = FastAPI(title="Sports Coach AI", version="1.0.0")
 
