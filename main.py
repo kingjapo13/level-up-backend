@@ -1,16 +1,16 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import os, shutil, uuid, sys
+import os
+import shutil
+import uuid
 from datetime import datetime
-from pathlib import Path
 
 import cv2
 import numpy as np
+import mediapipe as mp  # ✅ Correct MediaPipe import
+mp_pose_module = mp.solutions.pose  # Use this throughout your code
 
-# ---- MediaPipe SAFE IMPORT ----
-import mediapipe.python.solutions.pose as mp_pose_module
-
-# ---- FastAPI ----
+# ------------------ FastAPI ------------------
 app = FastAPI(title="LevelUp Sports AI", version="2.0")
 
 app.add_middleware(
@@ -23,7 +23,7 @@ app.add_middleware(
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ---- MediaPipe Pose ----
+# ------------------ MediaPipe Pose ------------------
 pose = mp_pose_module.Pose(
     static_image_mode=False,
     model_complexity=1,
@@ -31,16 +31,14 @@ pose = mp_pose_module.Pose(
     min_tracking_confidence=0.5,
 )
 
-# ------------------ UTILITIES ------------------
-
+# ------------------ Utilities ------------------
 def angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
     ba, bc = a - b, c - b
     cos = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
     return float(np.degrees(np.arccos(np.clip(cos, -1, 1))))
 
-# ------------------ SPORT LOGIC ------------------
-
+# ------------------ Sport Logic ------------------
 def basketball_shot(elbow, shoulder, wrist):
     elbow_angle = angle(shoulder, elbow, wrist)
     good = 85 <= elbow_angle <= 110
@@ -55,12 +53,11 @@ def golf_swing_phase(wrist_y, prev):
         return "downswing"
     return "follow_through"
 
-# ------------------ ANALYSIS ------------------
-
+# ------------------ Analysis ------------------
 def analyze(video_path, sport="basketball"):
     cap = cv2.VideoCapture(video_path)
 
-    frame_skip = 5  # ⚡ SPEED OPTIMIZATION
+    frame_skip = 5
     frame_id = 0
     prev_wrist_y = None
     reps = 0
@@ -68,7 +65,6 @@ def analyze(video_path, sport="basketball"):
 
     frames = []
     elbow_angles = []
-
     score = 100
     feedback = []
 
@@ -102,14 +98,14 @@ def analyze(video_path, sport="basketball"):
         )
         elbow_angles.append(elbow_angle)
 
-        # ---- Rep detection (simple) ----
+        # Rep detection
         if elbow_angle < 70:
             rep_state = "down"
         if elbow_angle > 140 and rep_state == "down":
             reps += 1
             rep_state = "up"
 
-        # ---- Sport Modes ----
+        # Sport-specific analysis
         bad_form = False
         phase = None
 
@@ -156,8 +152,7 @@ def analyze(video_path, sport="basketball"):
         "analyzed_at": datetime.now().isoformat(),
     }
 
-# ------------------ API ------------------
-
+# ------------------ API Endpoints ------------------
 @app.post("/upload-video")
 async def upload_video(
     file: UploadFile = File(...),
@@ -182,5 +177,4 @@ async def upload_video(
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
