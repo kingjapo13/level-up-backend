@@ -1,170 +1,186 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import os, shutil, uuid, sys
+from datetime import datetime
+from pathlib import Path
+
 import cv2
-import mediapipe as mp
 import numpy as np
-import tempfile
-import os
-import math
-import json
 
-app = FastAPI()
+# ---- MediaPipe SAFE IMPORT ----
+import mediapipe.python.solutions.pose as mp_pose_module
 
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=False,
-    model_complexity=1,
-    smooth_landmarks=True
+# ---- FastAPI ----
+app = FastAPI(title="LevelUp Sports AI", version="2.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# -------------------------
-# Utility math
-# -------------------------
-def calculate_angle(a, b, c):
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    ba = a - b
-    bc = c - b
+# ---- MediaPipe Pose ----
+pose = mp_pose_module.Pose(
+    static_image_mode=False,
+    model_complexity=1,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+)
 
-    cosine_angle = np.dot(ba, bc) / (
-        np.linalg.norm(ba) * np.linalg.norm(bc)
-    )
-    angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
-    return math.degrees(angle)
+# ------------------ UTILITIES ------------------
 
+def angle(a, b, c):
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    ba, bc = a - b, c - b
+    cos = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
+    return float(np.degrees(np.arccos(np.clip(cos, -1, 1))))
 
-def landmark_to_point(lm, w, h):
-    return [lm.x * w, lm.y * h]
+# ------------------ SPORT LOGIC ------------------
 
+def basketball_shot(elbow, shoulder, wrist):
+    elbow_angle = angle(shoulder, elbow, wrist)
+    good = 85 <= elbow_angle <= 110
+    return elbow_angle, good
 
-# -------------------------
-# Core analyzer
-# -------------------------
-def analyze_video(video_path, mode="squat"):
+def golf_swing_phase(wrist_y, prev):
+    if prev is None:
+        return "setup"
+    if wrist_y < prev - 0.02:
+        return "backswing"
+    if wrist_y > prev + 0.02:
+        return "downswing"
+    return "follow_through"
+
+# ------------------ ANALYSIS ------------------
+
+def analyze(video_path, sport="basketball"):
     cap = cv2.VideoCapture(video_path)
 
-    frame_count = 0
-    rep_count = 0
-    stage = None
-    output_frames = []
+    frame_skip = 5  # ⚡ SPEED OPTIMIZATION
+    frame_id = 0
+    prev_wrist_y = None
+    reps = 0
+    rep_state = "down"
+
+    frames = []
+    elbow_angles = []
+
+    score = 100
+    feedback = []
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        frame_count += 1
-
-        # ⏩ FRAME SAMPLING (every 3rd frame)
-        if frame_count % 3 != 0:
+        frame_id += 1
+        if frame_id % frame_skip != 0:
             continue
 
-        h, w, _ = frame.shape
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(rgb)
+        res = pose.process(rgb)
 
-        if not results.pose_landmarks:
+        if not res.pose_landmarks:
             continue
 
-        lm = results.pose_landmarks.landmark
+        lm = res.pose_landmarks.landmark
 
-        # Key joints
-        hip = landmark_to_point(lm[mp_pose.PoseLandmark.LEFT_HIP], w, h)
-        knee = landmark_to_point(lm[mp_pose.PoseLandmark.LEFT_KNEE], w, h)
-        ankle = landmark_to_point(lm[mp_pose.PoseLandmark.LEFT_ANKLE], w, h)
+        shoulder = lm[mp_pose_module.PoseLandmark.RIGHT_SHOULDER]
+        elbow = lm[mp_pose_module.PoseLandmark.RIGHT_ELBOW]
+        wrist = lm[mp_pose_module.PoseLandmark.RIGHT_WRIST]
+        hip = lm[mp_pose_module.PoseLandmark.RIGHT_HIP]
+        knee = lm[mp_pose_module.PoseLandmark.RIGHT_KNEE]
 
-        shoulder = landmark_to_point(lm[mp_pose.PoseLandmark.LEFT_SHOULDER], w, h)
-        elbow = landmark_to_point(lm[mp_pose.PoseLandmark.LEFT_ELBOW], w, h)
-        wrist = landmark_to_point(lm[mp_pose.PoseLandmark.LEFT_WRIST], w, h)
+        elbow_angle = angle(
+            [shoulder.x, shoulder.y],
+            [elbow.x, elbow.y],
+            [wrist.x, wrist.y],
+        )
+        elbow_angles.append(elbow_angle)
 
-        knee_angle = calculate_angle(hip, knee, ankle)
-        hip_angle = calculate_angle(shoulder, hip, knee)
-        elbow_angle = calculate_angle(shoulder, elbow, wrist)
+        # ---- Rep detection (simple) ----
+        if elbow_angle < 70:
+            rep_state = "down"
+        if elbow_angle > 140 and rep_state == "down":
+            reps += 1
+            rep_state = "up"
 
+        # ---- Sport Modes ----
         bad_form = False
-        feedback = []
+        phase = None
 
-        # -------------------------
-        # MODE LOGIC
-        # -------------------------
-        if mode == "squat":
-            if knee_angle < 90:
-                stage = "down"
-            if knee_angle > 160 and stage == "down":
-                rep_count += 1
-                stage = "up"
-
-            if hip_angle < 70:
+        if sport == "basketball":
+            _, good = basketball_shot(
+                [elbow.x, elbow.y],
+                [shoulder.x, shoulder.y],
+                [wrist.x, wrist.y],
+            )
+            if not good:
                 bad_form = True
-                feedback.append("Chest leaning too far forward")
+                score -= 0.5
 
-        elif mode == "pushup":
-            if elbow_angle < 90:
-                stage = "down"
-            if elbow_angle > 160 and stage == "down":
-                rep_count += 1
-                stage = "up"
+        if sport == "golf":
+            phase = golf_swing_phase(wrist.y, prev_wrist_y)
 
-            if hip_angle < 150:
-                bad_form = True
-                feedback.append("Hips sagging")
+        prev_wrist_y = wrist.y
 
-        # -------------------------
-        # Frame JSON output
-        # -------------------------
-        output_frames.append({
-            "frame": frame_count,
-            "angles": {
-                "knee": round(knee_angle, 1),
-                "hip": round(hip_angle, 1),
-                "elbow": round(elbow_angle, 1)
-            },
-            "rep_count": rep_count,
+        frames.append({
+            "frame": frame_id,
+            "elbow_angle": round(elbow_angle, 1),
             "bad_form": bad_form,
-            "feedback": feedback,
-            "landmarks": {
-                "hip": hip,
-                "knee": knee,
-                "ankle": ankle,
-                "shoulder": shoulder,
-                "elbow": elbow,
-                "wrist": wrist
-            }
+            "phase": phase,
         })
 
     cap.release()
 
+    avg_angle = np.mean(elbow_angles) if elbow_angles else 0
+
+    if avg_angle < 90:
+        feedback.append("Try keeping your elbow closer to 90° for better control.")
+    if reps == 0:
+        feedback.append("No clear reps detected. Make sure your full arm is visible.")
+
     return {
-        "mode": mode,
-        "total_reps": rep_count,
-        "frames_analyzed": len(output_frames),
-        "frames": output_frames
+        "sport": sport,
+        "overall_score": max(0, int(score)),
+        "reps": reps,
+        "coach_feedback": feedback or ["Solid mechanics overall."],
+        "charts": {
+            "elbow_angles": elbow_angles
+        },
+        "frames": frames,
+        "analyzed_at": datetime.now().isoformat(),
     }
 
+# ------------------ API ------------------
 
-# -------------------------
-# API endpoint
-# -------------------------
-@app.post("/analyze")
-async def analyze(
+@app.post("/upload-video")
+async def upload_video(
     file: UploadFile = File(...),
-    mode: str = "squat"
+    sport: str = Form("basketball"),
 ):
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    if not file.content_type.startswith("video/"):
+        raise HTTPException(400, "Video only")
 
-    result = analyze_video(tmp_path, mode)
-    os.remove(tmp_path)
+    filename = f"{uuid.uuid4()}.mp4"
+    path = os.path.join(UPLOAD_DIR, filename)
 
-    return result
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
 
+    result = analyze(path, sport)
 
-# -------------------------
-# Health check
-# -------------------------
-@app.get("/")
-def root():
-    return {"status": "LevelUp backend running 🚀"}
+    return {
+        "success": True,
+        "analysis": result,
+    }
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 
