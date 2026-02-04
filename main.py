@@ -1,86 +1,125 @@
 from fastapi import FastAPI, UploadFile, File
+from mediapipe import solutions
 import cv2
 import numpy as np
-from mediapipe import solutions
 import tempfile
 
 app = FastAPI()
 
-# MediaPipe Pose (NEW API)
 mp_pose = solutions.pose
 pose = mp_pose.Pose(
     static_image_mode=False,
     model_complexity=1,
-    enable_segmentation=False,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
 
-# ---------- Utility Functions ----------
+# ---------- Math ----------
 
-def calculate_angle(a, b, c):
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
+def angle(a, b, c):
+    a, b, c = map(np.array, (a, b, c))
+    rad = np.arctan2(c[1]-b[1], c[0]-b[0]) - \
+          np.arctan2(a[1]-b[1], a[0]-b[0])
+    deg = abs(rad * 180 / np.pi)
+    return 360 - deg if deg > 180 else deg
 
-    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - \
-              np.arctan2(a[1]-b[1], a[0]-b[0])
-    angle = abs(radians * 180.0 / np.pi)
+def lm(lms, idx):
+    p = lms[idx]
+    return [p.x, p.y]
 
-    if angle > 180:
-        angle = 360 - angle
+# ---------- AI Logic ----------
 
-    return round(angle, 2)
+def detect_rep(knee_angle, state):
+    if knee_angle < 90:
+        state["down"] = True
+    if knee_angle > 160 and state["down"]:
+        state["count"] += 1
+        state["down"] = False
 
-def extract_landmark(landmarks, idx):
-    lm = landmarks[idx]
-    return [lm.x, lm.y]
+def basketball_form(elbow, shoulder, wrist):
+    elbow_angle = angle(shoulder, elbow, wrist)
+    return elbow_angle > 140
 
-# ---------- API Route ----------
+def golf_phase(hip, shoulder, wrist):
+    if wrist[1] < shoulder[1]:
+        return "backswing"
+    if wrist[1] > hip[1]:
+        return "downswing"
+    return "setup"
+
+def score(form_flags):
+    good = sum(form_flags)
+    return int((good / max(len(form_flags),1)) * 100)
+
+# ---------- API ----------
 
 @app.post("/analyze")
-async def analyze_video(file: UploadFile = File(...)):
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    temp_file.write(await file.read())
+async def analyze(file: UploadFile = File(...)):
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(await file.read())
 
-    cap = cv2.VideoCapture(temp_file.name)
+    cap = cv2.VideoCapture(tmp.name)
 
-    frame_results = []
-    frame_count = 0
+    frames = []
+    rep_state = {"count": 0, "down": False}
+    form_checks = []
+
+    frame_id = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(image)
+        res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        if res.pose_landmarks:
+            lms = res.pose_landmarks.landmark
 
-        if result.pose_landmarks:
-            lm = result.pose_landmarks.landmark
+            hip = lm(lms, mp_pose.PoseLandmark.RIGHT_HIP)
+            knee = lm(lms, mp_pose.PoseLandmark.RIGHT_KNEE)
+            ankle = lm(lms, mp_pose.PoseLandmark.RIGHT_ANKLE)
 
-            hip = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_HIP)
-            knee = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_KNEE)
-            ankle = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_ANKLE)
+            shoulder = lm(lms, mp_pose.PoseLandmark.RIGHT_SHOULDER)
+            elbow = lm(lms, mp_pose.PoseLandmark.RIGHT_ELBOW)
+            wrist = lm(lms, mp_pose.PoseLandmark.RIGHT_WRIST)
 
-            knee_angle = calculate_angle(hip, knee, ankle)
+            knee_angle = angle(hip, knee, ankle)
+            detect_rep(knee_angle, rep_state)
 
-            frame_results.append({
-                "frame": frame_count,
-                "right_knee_angle": knee_angle
+            good_shot = basketball_form(elbow, shoulder, wrist)
+            phase = golf_phase(hip, shoulder, wrist)
+
+            form_checks.append(good_shot)
+
+            frames.append({
+                "frame": frame_id,
+                "knee_angle": round(knee_angle,2),
+                "basketball_form_good": good_shot,
+                "golf_phase": phase
             })
 
-        frame_count += 1
+        frame_id += 1
 
     cap.release()
 
+    overall_score = score(form_checks)
+
+    feedback = []
+    if overall_score < 60:
+        feedback.append("Work on joint alignment and consistency.")
+    if rep_state["count"] < 5:
+        feedback.append("Increase depth and full extension.")
+    if overall_score >= 80:
+        feedback.append("Excellent form consistency!")
+
     return {
-        "frames_analyzed": frame_count,
-        "pose_frames": len(frame_results),
-        "data": frame_results
+        "frames": frames,
+        "reps": rep_state["count"],
+        "score": overall_score,
+        "coach_feedback": feedback
     }
 
 @app.get("/")
 def health():
-    return {"status": "running"}
+    return {"status": "AI coach running"}
 
