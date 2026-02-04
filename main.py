@@ -1,112 +1,220 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+# main.py
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import shutil
+import uuid
+from datetime import datetime
+from collections import defaultdict
+
 import cv2
 import numpy as np
-import tempfile
+
+# ---- MediaPipe ----
 import mediapipe as mp
 
-app = FastAPI(title="LevelUp Sports AI")
-
 mp_pose = mp.solutions.pose
+
+# ---- FastAPI ----
+app = FastAPI(title="LevelUp Sports AI", version="3.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ---- MediaPipe Pose ----
 pose = mp_pose.Pose(
     static_image_mode=False,
     model_complexity=1,
     min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+    min_tracking_confidence=0.5,
 )
 
-# ----------------- UTILITIES -----------------
+# ---- Parent Dashboard Data ----
+# parent_id -> child_name -> list of analysis
+parent_data = defaultdict(lambda: defaultdict(list))
 
+# ------------------ UTILITIES ------------------
 def angle(a, b, c):
-    a, b, c = map(np.array, (a, b, c))
-    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - \
-              np.arctan2(a[1]-b[1], a[0]-b[0])
-    deg = abs(radians * 180 / np.pi)
-    return 360 - deg if deg > 180 else deg
+    a, b, c = np.array(a), np.array(b), np.array(c)
+    ba, bc = a - b, c - b
+    cos = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
+    return float(np.degrees(np.arccos(np.clip(cos, -1, 1))))
 
-def lm(landmarks, idx):
-    p = landmarks[idx]
-    return [p.x, p.y]
+# ------------------ SPORT LOGIC ------------------
+def basketball_shot(elbow, shoulder, wrist):
+    elbow_angle = angle(shoulder, elbow, wrist)
+    good = 85 <= elbow_angle <= 110
+    return elbow_angle, good
 
-# ----------------- ANALYSIS -----------------
+def golf_swing_phase(wrist_y, prev):
+    if prev is None:
+        return "setup"
+    if wrist_y < prev - 0.02:
+        return "backswing"
+    if wrist_y > prev + 0.02:
+        return "downswing"
+    return "follow_through"
 
-@app.post("/analyze")
-async def analyze_video(file: UploadFile = File(...)):
-    if not file.content_type.startswith("video"):
-        raise HTTPException(400, "Video file required")
+def soccer_kick(hip, knee, ankle):
+    knee_angle = angle(hip, knee, ankle)
+    good = 70 <= knee_angle <= 110
+    return knee_angle, good
 
-    temp = tempfile.NamedTemporaryFile(delete=False)
-    temp.write(await file.read())
+# ------------------ ANALYSIS ------------------
+def analyze(video_path, sport="basketball"):
+    cap = cv2.VideoCapture(video_path)
 
-    cap = cv2.VideoCapture(temp.name)
+    frame_skip = 5
+    frame_id = 0
+    prev_wrist_y = None
+    reps = 0
+    rep_state = "down"
 
     frames = []
-    reps = 0
-    down = False
-    good_frames = 0
-    total_frames = 0
+    angles = []
+
+    score = 100
+    feedback = []
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
+        frame_id += 1
+        if frame_id % frame_skip != 0:
+            continue
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
+        res = pose.process(rgb)
 
-        if result.pose_landmarks:
-            lms = result.pose_landmarks.landmark
+        if not res.pose_landmarks:
+            continue
 
-            hip = lm(lms, mp_pose.PoseLandmark.RIGHT_HIP)
-            knee = lm(lms, mp_pose.PoseLandmark.RIGHT_KNEE)
-            ankle = lm(lms, mp_pose.PoseLandmark.RIGHT_ANKLE)
+        lm = res.pose_landmarks.landmark
 
-            shoulder = lm(lms, mp_pose.PoseLandmark.RIGHT_SHOULDER)
-            elbow = lm(lms, mp_pose.PoseLandmark.RIGHT_ELBOW)
-            wrist = lm(lms, mp_pose.PoseLandmark.RIGHT_WRIST)
+        shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+        elbow = lm[mp_pose.PoseLandmark.RIGHT_ELBOW]
+        wrist = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
+        hip = lm[mp_pose.PoseLandmark.RIGHT_HIP]
+        knee = lm[mp_pose.PoseLandmark.RIGHT_KNEE]
+        ankle = lm[mp_pose.PoseLandmark.RIGHT_ANKLE]
 
-            knee_angle = angle(hip, knee, ankle)
-            elbow_angle = angle(shoulder, elbow, wrist)
+        bad_form = False
+        phase = None
+        angle_val = None
 
-            # Rep counting
-            if knee_angle < 90:
-                down = True
-            if knee_angle > 160 and down:
+        if sport == "basketball":
+            angle_val, good = basketball_shot(
+                [elbow.x, elbow.y],
+                [shoulder.x, shoulder.y],
+                [wrist.x, wrist.y],
+            )
+            if not good:
+                bad_form = True
+                score -= 0.5
+
+        elif sport == "golf":
+            angle_val = angle(shoulder.x, elbow.x, wrist.x)  # basic for charts
+            phase = golf_swing_phase(wrist.y, prev_wrist_y)
+
+        elif sport == "soccer":
+            angle_val, good = soccer_kick(
+                [hip.x, hip.y],
+                [knee.x, knee.y],
+                [ankle.x, ankle.y],
+            )
+            if not good:
+                bad_form = True
+                score -= 0.5
+
+        prev_wrist_y = wrist.y
+        angles.append(angle_val)
+
+        # Simple rep detection (for basketball/golf)
+        if angle_val is not None:
+            if angle_val < 70:
+                rep_state = "down"
+            if angle_val > 140 and rep_state == "down":
                 reps += 1
-                down = False
+                rep_state = "up"
 
-            good_form = elbow_angle > 140
-            if good_form:
-                good_frames += 1
-
-            total_frames += 1
-
-            frames.append({
-                "knee_angle": round(knee_angle, 1),
-                "elbow_angle": round(elbow_angle, 1),
-                "good_form": good_form
-            })
+        frames.append({
+            "frame": frame_id,
+            "angle": round(angle_val, 1) if angle_val else None,
+            "bad_form": bad_form,
+            "phase": phase,
+        })
 
     cap.release()
 
-    score = int((good_frames / max(total_frames, 1)) * 100)
+    avg_angle = np.mean(angles) if angles else 0
 
-    feedback = []
-    if score < 60:
-        feedback.append("Focus on arm extension and balance.")
+    if avg_angle < 90:
+        feedback.append("Try keeping your angles closer to 90° for better control.")
     if reps == 0:
-        feedback.append("No clear reps detected — make sure your full body is visible.")
-    if score >= 80:
-        feedback.append("Great consistency and form!")
+        feedback.append("No clear reps detected. Make sure your full limb is visible.")
 
     return {
+        "sport": sport,
+        "overall_score": max(0, int(score)),
         "reps": reps,
-        "overall_score": score,
-        "coach_feedback": feedback,
-        "frames": frames
+        "coach_feedback": feedback or ["Solid mechanics overall."],
+        "charts": {"angles": angles},
+        "frames": frames,
+        "analyzed_at": datetime.now().isoformat(),
     }
 
-@app.get("/")
+# ------------------ API ------------------
+@app.post("/upload-video")
+async def upload_video(
+    parent_id: str = Form(...),
+    child_name: str = Form(...),
+    file: UploadFile = File(...),
+    sport: str = Form(...),
+):
+    if sport not in ["basketball", "golf", "soccer"]:
+        raise HTTPException(400, "Sport must be basketball, golf, or soccer")
+    if not file.content_type.startswith("video/"):
+        raise HTTPException(400, "Video only")
+
+    filename = f"{uuid.uuid4()}.mp4"
+    path = os.path.join(UPLOAD_DIR, filename)
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    result = analyze(path, sport)
+    parent_data[parent_id][child_name].append(result)
+
+    return {"success": True, "analysis": result}
+
+@app.get("/parent-dashboard/{parent_id}/{child_name}")
+def get_dashboard(parent_id: str, child_name: str):
+    sessions = parent_data.get(parent_id, {}).get(child_name, [])
+    if not sessions:
+        return {"child_name": child_name, "total_sessions": 0, "progress": {}, "sessions": []}
+
+    avg_score = sum(s["overall_score"] for s in sessions) / len(sessions)
+    total_reps = sum(s["reps"] for s in sessions)
+
+    progress = {"avg_score": avg_score, "total_reps": total_reps}
+
+    return {
+        "child_name": child_name,
+        "total_sessions": len(sessions),
+        "progress": progress,
+        "sessions": sessions,
+    }
+
+@app.get("/health")
 def health():
-    return {"status": "LevelUp backend running"}
+    return {"status": "ok"}
 
 
