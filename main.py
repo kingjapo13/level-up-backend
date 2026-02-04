@@ -1,14 +1,13 @@
 from fastapi import FastAPI, UploadFile, File
 import cv2
 import numpy as np
-import mediapipe as mp
-import json
+from mediapipe import solutions
 import tempfile
 
 app = FastAPI()
 
-# MediaPipe setup (CORRECT WAY)
-mp_pose = mp.solutions.pose
+# MediaPipe Pose (NEW API)
+mp_pose = solutions.pose
 pose = mp_pose.Pose(
     static_image_mode=False,
     model_complexity=1,
@@ -43,6 +42,7 @@ def extract_landmark(landmarks, idx):
 async def analyze_video(file: UploadFile = File(...)):
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     temp_file.write(await file.read())
+
     cap = cv2.VideoCapture(temp_file.name)
 
     frame_results = []
@@ -59,10 +59,9 @@ async def analyze_video(file: UploadFile = File(...)):
         if result.pose_landmarks:
             lm = result.pose_landmarks.landmark
 
-            # Example: right knee angle
-            hip = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_HIP.value)
-            knee = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_KNEE.value)
-            ankle = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_ANKLE.value)
+            hip = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_HIP)
+            knee = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_KNEE)
+            ankle = extract_landmark(lm, mp_pose.PoseLandmark.RIGHT_ANKLE)
 
             knee_angle = calculate_angle(hip, knee, ankle)
 
@@ -82,5 +81,6 @@ async def analyze_video(file: UploadFile = File(...)):
     }
 
 @app.get("/")
-def health_check():
-    return {"status": "AI Coach backend running"}
+def health():
+    return {"status": "running"}
+
