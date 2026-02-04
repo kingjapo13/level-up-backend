@@ -7,8 +7,8 @@ from datetime import datetime
 
 import cv2
 import numpy as np
-import mediapipe as mp  # ✅ Correct MediaPipe import
-mp_pose_module = mp.solutions.pose  # Use this throughout your code
+# ---- MediaPipe SAFE IMPORT ----
+from mediapipe.python.solutions import pose as mp_pose_module
 
 # ------------------ FastAPI ------------------
 app = FastAPI(title="LevelUp Sports AI", version="2.0")
