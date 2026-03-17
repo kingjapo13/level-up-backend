@@ -36,7 +36,11 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     previous_score = int(last_log.score) if last_log and last_log.score else None
 
     from analysis.process_video import analyze_video as run_analysis
-    result = run_analysis(filename, sport=sport, previous_score=previous_score)
+    try:
+        result = run_analysis(filename, sport=sport, previous_score=previous_score)
+    except Exception as e:
+        logger.error(f"Analysis crashed: {e}", exc_info=True)
+        return {"error": f"Analysis failed: {str(e)}"}
 
     if "error" in result:
         return result

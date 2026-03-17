@@ -4,12 +4,16 @@ from sports.basketball import BasketballAnalyzer
 from sports.golf import GolfAnalyzer
 from sports.pickleball import PickleballAnalyzer
 from sports.soccer import SoccerAnalyzer
+from sports.tennis import TennisAnalyzer
+from sports.baseball import BaseballAnalyzer
 
 SPORT_REGISTRY: Dict[str, SportAnalyzer] = {
     "basketball": BasketballAnalyzer(),
     "golf": GolfAnalyzer(),
     "pickleball": PickleballAnalyzer(),
     "soccer": SoccerAnalyzer(),
+    "tennis": TennisAnalyzer(),
+    "baseball": BaseballAnalyzer(),
 }
 
 

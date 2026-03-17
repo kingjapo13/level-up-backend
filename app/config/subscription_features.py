@@ -2,7 +2,7 @@ from typing import Dict, Any
 
 FEATURES: Dict[str, Dict[str, Any]] = {
     "free": {
-        "max_uploads_per_week": 1,
+        "daily_upload_limit": 1,
         "max_athletes": 1,
         "weekly_reports": False,
         "detailed_feedback": False,
@@ -15,7 +15,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "early_access": False,
     },
     "pro": {
-        "max_uploads_per_week": -1,
+        "daily_upload_limit": -1,
         "max_athletes": 5,
         "weekly_reports": True,
         "detailed_feedback": True,
@@ -28,7 +28,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "early_access": False,
     },
     "elite": {
-        "max_uploads_per_week": -1,
+        "daily_upload_limit": -1,
         "max_athletes": -1,
         "weekly_reports": True,
         "detailed_feedback": True,

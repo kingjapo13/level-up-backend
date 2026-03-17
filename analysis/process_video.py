@@ -53,6 +53,20 @@ SPORT_JOINT_CONFIG = {
         "down_threshold": 70,
         "up_threshold": 155,
     },
+    "tennis": {
+        "joint": "right_elbow",
+        "proximal": "right_shoulder",
+        "distal": "right_wrist",
+        "down_threshold": 60,
+        "up_threshold": 155,
+    },
+    "baseball": {
+        "joint": "right_elbow",
+        "proximal": "right_shoulder",
+        "distal": "right_wrist",
+        "down_threshold": 60,
+        "up_threshold": 155,
+    },
 }
 
 DEFAULT_SPORT = "squat"

@@ -12,6 +12,16 @@ TRAINING_TEMPLATES = {
         {"focus": "Short game", "drills": ["Chipping", "Putting distance control", "Bunker shots"]},
         {"focus": "Course management", "drills": ["Target practice", "9-hole focus round"]},
     ],
+    "tennis": [
+        {"focus": "Serve mechanics", "drills": ["Ball toss practice", "Serve motion shadow swings", "Kick serve practice"]},
+        {"focus": "Groundstrokes", "drills": ["Forehand cross court", "Backhand down the line", "Rally consistency"]},
+        {"focus": "Footwork & positioning", "drills": ["Split step timing", "Cone agility drills", "Approach shot practice"]},
+    ],
+    "baseball": [
+        {"focus": "Throwing mechanics", "drills": ["Long toss", "Wrist snaps", "Crow hops"]},
+        {"focus": "Hitting", "drills": ["Tee work", "Soft toss", "Live BP"]},
+        {"focus": "Fielding", "drills": ["Ground balls", "Fly balls", "Double play footwork"]},
+    ],
     "general": [
         {"focus": "Lower body explosiveness", "drills": ["Jump squats", "Lateral bounds", "Sprint intervals"]},
         {"focus": "Mobility + recovery", "drills": ["Hip openers", "Foam roll", "Light jog"]},
