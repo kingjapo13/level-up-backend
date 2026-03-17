@@ -1,11 +1,20 @@
-# Level Up Backend - deployable dependencies
-# Do not include pip/setuptools/wheel here; platforms provide them.
-
-fastapi>=0.104.0,<0.115.0
-uvicorn[standard]>=0.24.0,<0.32.0
-python-multipart>=0.0.6
-
-# Video & pose (use compatible versions for deployment)
-opencv-python-headless>=4.8.0,<4.10.0
-mediapipe>=0.10.0,<0.11.0
-numpy>=1.24.0,<2.0.0
+fastapi==0.114.2
+uvicorn[standard]==0.31.1
+python-multipart==0.0.22
+opencv-python-headless==4.9.0.80
+mediapipe==0.10.32
+numpy==1.26.4
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+alembic==1.13.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+openai==1.30.1
+stripe==9.9.0
+sendgrid==6.11.0
+firebase-admin==6.5.0
+reportlab==4.1.0
+apscheduler==3.10.4
+python-dotenv==1.0.1
+pydantic[email]==2.7.1
