@@ -17,7 +17,6 @@ LANDMARK = {
     "left_ankle": 27,    "right_ankle": 28,
 }
 
-# Support both old and new mediapipe versions
 try:
     mp_pose = mp.solutions.pose
     USE_LEGACY = True
@@ -28,73 +27,44 @@ except AttributeError:
 
 
 def convert_video(input_path: str) -> str:
-    """
-    Converts video to MP4 H.264 format for compatibility.
-    Uses imageio/ffmpeg for conversion without system dependencies.
-    """
     try:
         import imageio
+        import imageio_ffmpeg
         output_path = os.path.splitext(input_path)[0] + '_conv.mp4'
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
 
-        # Read with imageio and write as standard mp4
-        reader = imageio.get_reader(input_path)
-        fps = reader.get_meta_data().get('fps', 30)
-        writer = imageio.get_writer(
-            output_path,
-            fps=fps,
-            codec='libx264',
-            quality=5,
-        )
+        cmd = [
+            ffmpeg_path,
+            '-i', input_path,
+            '-vcodec', 'libx264',
+            '-acodec', 'aac',
+            '-preset', 'fast',
+            '-crf', '23',
+            '-movflags', '+faststart',
+            '-max_muxing_queue_size', '1024',
+            '-y',
+            output_path
+        ]
 
-        for frame in reader:
-            writer.append_data(frame)
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
 
-        reader.close()
-        writer.close()
-
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-            logger.info(f"Video converted via imageio: {output_path}")
-            try:
-                os.remove(input_path)
-            except Exception:
-                pass
-            return output_path
-        else:
-            logger.warning("imageio conversion produced invalid file")
-            return input_path
-
-    except Exception as e:
-        logger.warning(f"imageio conversion failed: {e}")
-
-        # Fall back to subprocess ffmpeg if available
-        try:
-            output_path = os.path.splitext(input_path)[0] + '_conv2.mp4'
-            result = subprocess.run([
-                'ffmpeg', '-i', input_path,
-                '-vcodec', 'libx264',
-                '-acodec', 'aac',
-                '-movflags', '+faststart',
-                '-y', output_path
-            ], capture_output=True, timeout=120)
-
-            if result.returncode == 0 and os.path.exists(output_path):
-                logger.info(f"Video converted via ffmpeg subprocess")
+        if result.returncode == 0 and os.path.exists(output_path):
+            out_size = os.path.getsize(output_path)
+            if out_size > 1000:
+                logger.info(f"Video converted: {output_path} ({out_size} bytes)")
                 try:
                     os.remove(input_path)
                 except Exception:
                     pass
                 return output_path
-        except Exception as e2:
-            logger.warning(f"Subprocess ffmpeg also failed: {e2}")
+            else:
+                logger.warning("Converted file too small - using original")
+                return input_path
+        else:
+            stderr = result.stderr.decode('utf-8', errors='ignore')
+            logger.warning(f"FFmpeg failed: {stderr[-300:]}")
+            return input_path
 
-        return input_path
-
-    except FileNotFoundError:
-        logger.warning("FFmpeg not found — skipping conversion")
-        return input_path
-    except subprocess.TimeoutExpired:
-        logger.warning("FFmpeg timed out — using original")
-        return input_path
     except Exception as e:
         logger.warning(f"Video conversion error: {e}")
         return input_path
@@ -105,13 +75,8 @@ def extract_landmarks_from_video(
     min_detection_confidence: float = 0.5,
     min_tracking_confidence: float = 0.5,
 ) -> List[Dict[str, tuple]]:
-    """
-    Extracts pose landmarks from every frame of a video.
-    Automatically handles video format conversion.
-    """
     frames_landmarks = []
 
-    # Verify file exists and is readable
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
         return frames_landmarks
@@ -119,10 +84,9 @@ def extract_landmarks_from_video(
     file_size = os.path.getsize(video_path)
     logger.info(f"Processing video: {video_path} ({file_size} bytes)")
 
-    # Try to open with OpenCV first
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        logger.warning(f"OpenCV could not open video directly — trying conversion")
+        logger.warning("OpenCV could not open video - trying conversion")
         cap.release()
         video_path = convert_video(video_path)
         cap = cv2.VideoCapture(video_path)
@@ -143,7 +107,6 @@ def extract_landmarks_from_video(
 
     cap.release()
 
-    # Clean up converted file
     if '_conv' in video_path:
         try:
             os.remove(video_path)
@@ -155,7 +118,6 @@ def extract_landmarks_from_video(
 
 
 def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
-    """MediaPipe legacy API (0.10.x)"""
     frames_landmarks = []
 
     with mp_pose.Pose(
@@ -170,12 +132,9 @@ def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
                 break
 
             frame_count += 1
-
-            # Skip frames for performance (process every 2nd frame)
             if frame_count % 2 != 0:
                 continue
 
-            # Resize large frames for faster processing
             h, w = frame.shape[:2]
             if w > 1280:
                 scale = 1280 / w
@@ -202,7 +161,6 @@ def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
 
 
 def _extract_new(cap):
-    """MediaPipe new Tasks API"""
     frames_landmarks = []
     try:
         from mediapipe.tasks import python as mp_python
@@ -258,5 +216,10 @@ def get_landmark_point(
     name: str,
     min_visibility: float = 0.5,
 ) -> Optional[tuple]:
-    """
-    Returns (x, y, z) for a named
+    data = frame.get(name)
+    if data is None:
+        return None
+    x, y, z, visibility = data
+    if visibility < min_visibility:
+        return None
+    return (x, y, z)
