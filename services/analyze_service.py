@@ -51,21 +51,29 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     if file_size < 1000:
         return {"error": "Video file is too small or corrupted. Please try uploading again."}
 
-    # 4. Convert video format for compatibility (fixes iPhone HEVC/moov atom issues)
-    from analysis.pose_detection import convert_video
-    converted_filename = convert_video(filename)
+    # 4. Convert video format for compatibility
+    try:
+        from analysis.pose_detection import convert_video
+        converted_filename = convert_video(filename)
+    except Exception as e:
+        logger.warning(f"Video conversion failed: {e}")
+        converted_filename = filename
 
     # 5. Get previous score for improvement tracking
-    last_log = (
-        db.query(PerformanceLog)
-        .filter(
-            PerformanceLog.user_id == user.id,
-            PerformanceLog.sport == sport,
+    try:
+        last_log = (
+            db.query(PerformanceLog)
+            .filter(
+                PerformanceLog.user_id == user.id,
+                PerformanceLog.sport == sport,
+            )
+            .order_by(PerformanceLog.created_at.desc())
+            .first()
         )
-        .order_by(PerformanceLog.created_at.desc())
-        .first()
-    )
-    previous_score = int(last_log.score) if last_log and last_log.score else None
+        previous_score = int(last_log.score) if last_log and last_log.score else None
+    except Exception as e:
+        logger.warning(f"Could not get previous score: {e}")
+        previous_score = None
 
     # 6. Run pose analysis
     try:
@@ -109,3 +117,23 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
         )
         db.add(log)
         db.commit()
+    except Exception as e:
+        logger.error(f"Failed to save performance log: {e}")
+
+    # 9. Push notification
+    _notify_complete(user)
+
+    return result
+
+
+def _notify_complete(user: User):
+    if not user.device_token:
+        return
+    try:
+        send_push_notification(
+            token=user.device_token,
+            title="Analysis Ready 🏆",
+            body="Your LevelUp AI coaching feedback is ready to view.",
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed for user {user.id}: {e}")
