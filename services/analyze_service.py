@@ -18,32 +18,63 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
+    """
+    Full analysis pipeline:
+    1. Enforces upload limits
+    2. Saves uploaded file to disk safely
+    3. Converts video format for compatibility
+    4. Runs pose analysis
+    5. Optionally enriches with GPT feedback
+    6. Saves PerformanceLog to DB
+    7. Sends push notification
+    """
+    # 1. Check upload limit
     enforce_upload_limit(user, db)
 
-    # Save file
+    # 2. Save file safely
     ext = os.path.splitext(file.filename)[-1].lower() or ".mp4"
-    # Convert hevc/mov to mp4 for compatibility
-    filename = f"{UPLOAD_DIR}/{uuid.uuid4()}.mp4"
-    with open(filename, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
     filename = f"{UPLOAD_DIR}/{uuid.uuid4()}{ext}"
-    with open(filename, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
 
-    logger.info(f"User {user.id} uploaded video for sport={sport}: {filename}")
+    try:
+        with open(filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+    except Exception as e:
+        logger.error(f"Failed to save uploaded file: {e}")
+        return {"error": "Failed to save video. Please try again."}
 
+    # 3. Verify file is valid
+    file_size = os.path.getsize(filename)
+    logger.info(f"User {user.id} uploaded {filename} ({file_size} bytes) for sport={sport}")
+
+    if file_size < 1000:
+        return {"error": "Video file is too small or corrupted. Please try uploading again."}
+
+    # 4. Convert video format for compatibility (fixes iPhone HEVC/moov atom issues)
+    from analysis.pose_detection import convert_video
+    converted_filename = convert_video(filename)
+
+    # 5. Get previous score for improvement tracking
     last_log = (
         db.query(PerformanceLog)
-        .filter(PerformanceLog.user_id == user.id, PerformanceLog.sport == sport)
+        .filter(
+            PerformanceLog.user_id == user.id,
+            PerformanceLog.sport == sport,
+        )
         .order_by(PerformanceLog.created_at.desc())
         .first()
     )
     previous_score = int(last_log.score) if last_log and last_log.score else None
 
-    from analysis.process_video import analyze_video as run_analysis
+    # 6. Run pose analysis
     try:
-        result = run_analysis(filename, sport=sport, previous_score=previous_score)
+        from analysis.process_video import analyze_video as run_analysis
+        result = run_analysis(
+            converted_filename,
+            sport=sport,
+            previous_score=previous_score,
+        )
     except Exception as e:
         logger.error(f"Analysis crashed: {e}", exc_info=True)
         return {"error": f"Analysis failed: {str(e)}"}
@@ -51,41 +82,30 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     if "error" in result:
         return result
 
+    # 7. Enrich with GPT feedback for Pro/Elite users
     if has_feature(user, "detailed_feedback"):
-        gpt = generate_gpt_feedback(
-            metrics=result,
-            sport=sport,
-            personality=user.personality_mode or "supportive",
-        )
-        result["gpt_feedback"] = gpt
+        try:
+            gpt = generate_gpt_feedback(
+                metrics=result,
+                sport=sport,
+                personality=user.personality_mode or "supportive",
+            )
+            result["gpt_feedback"] = gpt
+        except Exception as e:
+            logger.warning(f"GPT feedback failed: {e}")
 
-    log = PerformanceLog(
-        user_id=user.id,
-        sport=sport,
-        score=result.get("score"),
-        reps=result.get("reps_completed"),
-        video_path=filename,
-        metrics={
-            "form_issues": result.get("form_issues", []),
-            "coaching_tips": result.get("coaching_tips", []),
-        },
-    )
-    db.add(log)
-    db.commit()
-
-    _notify_complete(user)
-
-    return result
-
-
-def _notify_complete(user: User):
-    if not user.device_token:
-        return
+    # 8. Save performance log
     try:
-        send_push_notification(
-            token=user.device_token,
-            title="Analysis Ready 🏆",
-            body="Your LevelUp AI coaching feedback is ready to view.",
+        log = PerformanceLog(
+            user_id=user.id,
+            sport=sport,
+            score=result.get("score"),
+            reps=result.get("reps_completed"),
+            video_path=converted_filename,
+            metrics={
+                "form_issues": result.get("form_issues", []),
+                "coaching_tips": result.get("coaching_tips", []),
+            },
         )
-    except Exception as e:
-        logger.warning(f"Push notification failed for user {user.id}: {e}")
+        db.add(log)
+        db.commit()
