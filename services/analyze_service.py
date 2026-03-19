@@ -20,7 +20,13 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     enforce_upload_limit(user, db)
 
-    ext = os.path.splitext(file.filename)[-1] or ".mp4"
+    # Save file
+    ext = os.path.splitext(file.filename)[-1].lower() or ".mp4"
+    # Convert hevc/mov to mp4 for compatibility
+    filename = f"{UPLOAD_DIR}/{uuid.uuid4()}.mp4"
+    with open(filename, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
     filename = f"{UPLOAD_DIR}/{uuid.uuid4()}{ext}"
     with open(filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
