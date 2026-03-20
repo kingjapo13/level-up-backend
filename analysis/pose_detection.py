@@ -27,8 +27,12 @@ except AttributeError:
 
 
 def convert_video(input_path: str) -> str:
+    """
+    Converts and compresses video for compatibility and memory efficiency.
+    Shrinks to 640px wide, 15fps, max 30 seconds.
+    Uses imageio_ffmpeg bundled ffmpeg - no system install needed.
+    """
     try:
-        import imageio
         import imageio_ffmpeg
         output_path = os.path.splitext(input_path)[0] + '_conv.mp4'
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -38,20 +42,27 @@ def convert_video(input_path: str) -> str:
             '-i', input_path,
             '-vcodec', 'libx264',
             '-acodec', 'aac',
-            '-preset', 'fast',
-            '-crf', '23',
+            '-preset', 'ultrafast',
+            '-crf', '35',
+            '-vf', 'scale=640:-2',
+            '-r', '15',
+            '-t', '30',
             '-movflags', '+faststart',
             '-max_muxing_queue_size', '1024',
             '-y',
             output_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, timeout=60)
 
         if result.returncode == 0 and os.path.exists(output_path):
             out_size = os.path.getsize(output_path)
             if out_size > 1000:
-                logger.info(f"Video converted: {output_path} ({out_size} bytes)")
+                in_size = os.path.getsize(input_path)
+                logger.info(
+                    f"Video compressed: {in_size} -> {out_size} bytes "
+                    f"({100 - int(out_size/in_size*100)}% reduction)"
+                )
                 try:
                     os.remove(input_path)
                 except Exception:
@@ -62,7 +73,7 @@ def convert_video(input_path: str) -> str:
                 return input_path
         else:
             stderr = result.stderr.decode('utf-8', errors='ignore')
-            logger.warning(f"FFmpeg failed: {stderr[-300:]}")
+            logger.warning(f"FFmpeg failed (code {result.returncode}): {stderr[-300:]}")
             return input_path
 
     except Exception as e:
@@ -75,6 +86,10 @@ def extract_landmarks_from_video(
     min_detection_confidence: float = 0.5,
     min_tracking_confidence: float = 0.5,
 ) -> List[Dict[str, tuple]]:
+    """
+    Extracts pose landmarks from every other frame of a video.
+    Handles format conversion automatically.
+    """
     frames_landmarks = []
 
     if not os.path.exists(video_path):
@@ -86,7 +101,7 @@ def extract_landmarks_from_video(
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        logger.warning("OpenCV could not open video - trying conversion")
+        logger.warning("OpenCV could not open video directly - trying conversion")
         cap.release()
         video_path = convert_video(video_path)
         cap = cv2.VideoCapture(video_path)
@@ -118,6 +133,7 @@ def extract_landmarks_from_video(
 
 
 def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
+    """MediaPipe legacy API (0.10.x)"""
     frames_landmarks = []
 
     with mp_pose.Pose(
@@ -136,9 +152,9 @@ def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
                 continue
 
             h, w = frame.shape[:2]
-            if w > 1280:
-                scale = 1280 / w
-                frame = cv2.resize(frame, (1280, int(h * scale)))
+            if w > 640:
+                scale = 640 / w
+                frame = cv2.resize(frame, (640, int(h * scale)))
 
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             rgb_frame.flags.writeable = False
@@ -161,6 +177,7 @@ def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
 
 
 def _extract_new(cap):
+    """MediaPipe new Tasks API"""
     frames_landmarks = []
     try:
         from mediapipe.tasks import python as mp_python
@@ -184,6 +201,11 @@ def _extract_new(cap):
                 frame_count += 1
                 if frame_count % 2 != 0:
                     continue
+
+                h, w = frame.shape[:2]
+                if w > 640:
+                    scale = 640 / w
+                    frame = cv2.resize(frame, (640, int(h * scale)))
 
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(

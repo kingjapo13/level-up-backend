@@ -18,16 +18,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
-    """
-    Full analysis pipeline:
-    1. Enforces upload limits
-    2. Saves uploaded file to disk safely
-    3. Converts video format for compatibility
-    4. Runs pose analysis
-    5. Optionally enriches with GPT feedback
-    6. Saves PerformanceLog to DB
-    7. Sends push notification
-    """
     # 1. Check upload limit
     enforce_upload_limit(user, db)
 
@@ -51,10 +41,11 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     if file_size < 1000:
         return {"error": "Video file is too small or corrupted. Please try uploading again."}
 
-    # 4. Convert video format for compatibility
+    # 4. Always convert and compress video for compatibility and memory
     try:
         from analysis.pose_detection import convert_video
         converted_filename = convert_video(filename)
+        logger.info(f"Using converted video: {converted_filename}")
     except Exception as e:
         logger.warning(f"Video conversion failed: {e}")
         converted_filename = filename
