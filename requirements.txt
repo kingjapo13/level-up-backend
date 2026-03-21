@@ -2,7 +2,7 @@ fastapi==0.114.2
 uvicorn[standard]==0.31.1
 python-multipart==0.0.22
 opencv-python-headless==4.9.0.80
-mediapipe==0.10.32
+mediapipe==0.10.11
 numpy==1.26.4
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
