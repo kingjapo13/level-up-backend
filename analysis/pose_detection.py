@@ -17,13 +17,21 @@ LANDMARK = {
     "left_ankle": 27,    "right_ankle": 28,
 }
 
+# Always use legacy MediaPipe - new API requires external model file
 try:
     mp_pose = mp.solutions.pose
-    USE_LEGACY = True
-    logger.info("Using legacy MediaPipe pose detection")
-except AttributeError:
-    USE_LEGACY = False
-    logger.info("Using new MediaPipe pose detection")
+    logger.info("MediaPipe pose loaded successfully")
+except Exception as e:
+    mp_pose = None
+    logger.error(f"MediaPipe failed to load: {e}")
+
+
+def fix_rotation(frame):
+    """Fix iPhone video rotation - rotate portrait videos to landscape."""
+    h, w = frame.shape[:2]
+    if h > w:
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    return frame
 
 
 def convert_video(input_path: str) -> str:
@@ -61,7 +69,7 @@ def convert_video(input_path: str) -> str:
                 in_size = os.path.getsize(input_path)
                 logger.info(
                     f"Video compressed: {in_size} -> {out_size} bytes "
-                    f"({100 - int(out_size/in_size*100)}% reduction)"
+                    f"({100 - int(out_size / in_size * 100)}% reduction)"
                 )
                 try:
                     os.remove(input_path)
@@ -88,9 +96,13 @@ def extract_landmarks_from_video(
 ) -> List[Dict[str, tuple]]:
     """
     Extracts pose landmarks from every other frame of a video.
-    Handles format conversion automatically.
+    Always uses legacy MediaPipe API.
     """
     frames_landmarks = []
+
+    if mp_pose is None:
+        logger.error("MediaPipe not available")
+        return frames_landmarks
 
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
@@ -113,12 +125,9 @@ def extract_landmarks_from_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     logger.info(f"Video opened: {total_frames} frames at {fps:.1f} FPS")
 
-    if USE_LEGACY:
-        frames_landmarks = _extract_legacy(
-            cap, min_detection_confidence, min_tracking_confidence
-        )
-    else:
-        frames_landmarks = _extract_new(cap)
+    frames_landmarks = _extract_legacy(
+        cap, min_detection_confidence, min_tracking_confidence
+    )
 
     cap.release()
 
@@ -133,102 +142,63 @@ def extract_landmarks_from_video(
 
 
 def _extract_legacy(cap, min_detection_confidence, min_tracking_confidence):
-    """MediaPipe legacy API (0.10.x)"""
+    """MediaPipe legacy API - works on all mediapipe versions."""
     frames_landmarks = []
 
-    with mp_pose.Pose(
-        min_detection_confidence=min_detection_confidence,
-        min_tracking_confidence=min_tracking_confidence,
-        model_complexity=1,
-    ) as pose:
-        frame_count = 0
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            frame_count += 1
-            if frame_count % 2 != 0:
-                continue
-
-            h, w = frame.shape[:2]
-            if w > 640:
-                scale = 640 / w
-                frame = cv2.resize(frame, (640, int(h * scale)))
-
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb_frame.flags.writeable = False
-            results = pose.process(rgb_frame)
-            rgb_frame.flags.writeable = True
-
-            if results.pose_landmarks:
-                frame_data = {}
-                lm = results.pose_landmarks.landmark
-                for name, idx in LANDMARK.items():
-                    frame_data[name] = (
-                        lm[idx].x,
-                        lm[idx].y,
-                        lm[idx].z,
-                        lm[idx].visibility,
-                    )
-                frames_landmarks.append(frame_data)
-
-    return frames_landmarks
-
-
-def _extract_new(cap):
-    """MediaPipe new Tasks API"""
-    frames_landmarks = []
     try:
-        from mediapipe.tasks import python as mp_python
-        from mediapipe.tasks.python import vision
+        with mp_pose.Pose(
+            min_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+            model_complexity=1,
+        ) as pose:
+            frame_count = 0
+            detected_count = 0
 
-        base_options = mp_python.BaseOptions(
-            model_asset_path='pose_landmarker.task'
-        )
-        options = vision.PoseLandmarkerOptions(
-            base_options=base_options,
-            output_segmentation_masks=False,
-        )
-
-        frame_count = 0
-        with vision.PoseLandmarker.create_from_options(options) as landmarker:
             while cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
                     break
 
                 frame_count += 1
+
+                # Process every other frame to save memory
                 if frame_count % 2 != 0:
                     continue
 
+                # Fix iPhone rotation
+                frame = fix_rotation(frame)
+
+                # Resize to max 640px wide
                 h, w = frame.shape[:2]
                 if w > 640:
                     scale = 640 / w
                     frame = cv2.resize(frame, (640, int(h * scale)))
 
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(
-                    image_format=mp.ImageFormat.SRGB,
-                    data=rgb_frame,
-                )
-                result = landmarker.detect(mp_image)
+                rgb_frame.flags.writeable = False
+                results = pose.process(rgb_frame)
+                rgb_frame.flags.writeable = True
 
-                if result.pose_landmarks:
+                if results.pose_landmarks:
+                    detected_count += 1
                     frame_data = {}
-                    lm = result.pose_landmarks[0]
+                    lm = results.pose_landmarks.landmark
                     for name, idx in LANDMARK.items():
-                        if idx < len(lm):
-                            frame_data[name] = (
-                                lm[idx].x,
-                                lm[idx].y,
-                                lm[idx].z,
-                                getattr(lm[idx], 'visibility', 1.0),
-                            )
+                        frame_data[name] = (
+                            lm[idx].x,
+                            lm[idx].y,
+                            lm[idx].z,
+                            lm[idx].visibility,
+                        )
                     frames_landmarks.append(frame_data)
 
+            logger.info(
+                f"Processed {frame_count} frames, "
+                f"detected pose in {detected_count} frames"
+            )
+
     except Exception as e:
-        logger.error(f"New MediaPipe extraction failed: {e}")
+        logger.error(f"Legacy MediaPipe extraction failed: {e}", exc_info=True)
 
     return frames_landmarks
 
@@ -238,6 +208,9 @@ def get_landmark_point(
     name: str,
     min_visibility: float = 0.5,
 ) -> Optional[tuple]:
+    """
+    Returns (x, y, z) for a named landmark if visible enough, else None.
+    """
     data = frame.get(name)
     if data is None:
         return None
