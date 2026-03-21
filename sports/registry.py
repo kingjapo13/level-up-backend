@@ -6,6 +6,8 @@ from sports.pickleball import PickleballAnalyzer
 from sports.soccer import SoccerAnalyzer
 from sports.tennis import TennisAnalyzer
 from sports.baseball import BaseballAnalyzer
+from sports.volleyball import VolleyballAnalyzer
+from sports.boxing import BoxingAnalyzer
 
 SPORT_REGISTRY: Dict[str, SportAnalyzer] = {
     "basketball": BasketballAnalyzer(),
@@ -14,6 +16,8 @@ SPORT_REGISTRY: Dict[str, SportAnalyzer] = {
     "soccer": SoccerAnalyzer(),
     "tennis": TennisAnalyzer(),
     "baseball": BaseballAnalyzer(),
+    "volleyball": VolleyballAnalyzer(),
+    "boxing": BoxingAnalyzer(),
 }
 
 
