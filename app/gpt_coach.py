@@ -35,8 +35,10 @@ def generate_gpt_feedback(
         return None
 
     try:
+        import httpx
         from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        http_client = httpx.Client()
+        client = OpenAI(api_key=api_key, http_client=http_client)
 
         system_prompt = PERSONALITY_PROMPTS.get(
             personality, PERSONALITY_PROMPTS["supportive"]
