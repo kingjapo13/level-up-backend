@@ -19,13 +19,16 @@ def get_dashboard(
     user: User = Depends(get_current_user),
 ):
     tier = get_tier(user)
+
     logs = (
         db.query(PerformanceLog)
         .filter(PerformanceLog.user_id == user.id)
         .order_by(PerformanceLog.created_at.asc())
         .all()
     )
+
     scores = [l.score for l in logs if l.score is not None]
+
     progress = [
         {
             "date": log.created_at,
@@ -35,9 +38,23 @@ def get_dashboard(
         }
         for log in logs
     ]
+
+    # Trial info
+    trial_days = 0
+    is_trial = False
+    trial_expired = False
+
+    if user.subscription:
+        is_trial = user.subscription.is_trial
+        trial_expired = user.subscription.trial_expired
+        trial_days = user.subscription.trial_days_remaining
+
     return {
         "username": user.username,
         "tier": tier,
+        "is_trial": is_trial,
+        "trial_expired": trial_expired,
+        "trial_days_remaining": trial_days,
         "total_sessions": len(logs),
         "average_score": safe_average(scores),
         "progress": progress,

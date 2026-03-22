@@ -57,7 +57,13 @@ def register(user_data: UserCreateSchema, db: Session = Depends(get_db)):
     db.add(new_user)
     db.flush()
 
-    subscription = Subscription(user_id=new_user.id, tier="free")
+    from datetime import datetime, timedelta
+    subscription = Subscription(
+        user_id=new_user.id,
+        tier="trial",
+        trial_end=datetime.utcnow() + timedelta(days=7),
+        is_active=True,
+    )
     db.add(subscription)
     db.commit()
     db.refresh(new_user)
