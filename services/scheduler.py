@@ -4,36 +4,49 @@ from apscheduler.schedulers.background import BackgroundScheduler
 logger = logging.getLogger(__name__)
 
 
-def _weekly_reports_job():
+def _trial_expiry_job():
+    """Sends trial expiry warning emails on day 5 and expired emails on day 8."""
     from app.db.database import SessionLocal
     from app.models.user import User
-    from services.elite_ai_report_service import generate_elite_report
-    from services.ai_report_service import generate_weekly_report
-    from services.email_service import send_email
+    from datetime import datetime, timedelta
+    from services.email_service import send_trial_expiry_warning, send_trial_expired
 
     db = SessionLocal()
     try:
         users = db.query(User).all()
+        now = datetime.utcnow()
+
         for user in users:
-            tier = user.subscription.tier if user.subscription and user.subscription.is_active else "free"
-            if tier not in ("pro", "elite"):
+            if not user.subscription or not user.subscription.is_trial:
                 continue
             if not user.email:
                 continue
-            if tier == "elite":
-                report = generate_elite_report(user, db)
-                body = report.get("ai_report", "No report generated.")
-            else:
-                report = generate_weekly_report(user, db)
-                body = report.get("ai_coaching_report", "No report generated.")
-            send_email(
-                to=user.email,
-                subject="Your Weekly LevelUp Coaching Report 🏆",
-                body=body,
-            )
-            logger.info(f"Weekly report sent to {user.email} (tier={tier})")
+
+            trial_end = user.subscription.trial_end
+            if not trial_end:
+                continue
+
+            days_left = (trial_end - now).days
+
+            # Send warning on day 5 (2 days before expiry)
+            if days_left == 2:
+                send_trial_expiry_warning(
+                    to=user.email,
+                    username=user.username,
+                    days_left=2,
+                )
+                logger.info(f"Trial warning sent to {user.email}")
+
+            # Send expired email day after expiry
+            elif days_left == -1:
+                send_trial_expired(
+                    to=user.email,
+                    username=user.username,
+                )
+                logger.info(f"Trial expired email sent to {user.email}")
+
     except Exception as e:
-        logger.error(f"Weekly reports job failed: {e}")
+        logger.error(f"Trial expiry job failed: {e}")
     finally:
         db.close()
 
@@ -60,4 +73,6 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.add_job(_training_reminders_job, "cron", day_of_week="mon", hour=7)
     scheduler.start()
     logger.info("Scheduler started.")
+    # Trial expiry emails — check daily at 9am
+    scheduler.add_job(_trial_expiry_job, "cron", hour=9)
     return scheduler
