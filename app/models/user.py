@@ -17,3 +17,4 @@ class User(Base):
     athletes = relationship("Athlete", back_populates="owner")
     performance_logs = relationship("PerformanceLog", back_populates="user")
     sessions = relationship("Session", back_populates="user")
+    athlete_profile = relationship("AthleteProfile", back_populates="user", uselist=False)

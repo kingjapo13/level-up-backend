@@ -10,6 +10,8 @@ import app.db.models
 from app.db.database import Base
 from app.routers import auth, analyze, athletes, dashboard, notifications, performance_logs, webhooks
 from services.scheduler import start_scheduler
+from app.routers.athletes import router as athletes_router
+app.include_router(athletes_router)
 
 logging.basicConfig(
     level=logging.INFO,
