@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
 
 from app.db.database import get_db
 from app.models.user import User
@@ -11,6 +12,67 @@ from services.dashboard_service import generate_training_plan
 from utils.helpers import safe_average, get_tier
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+
+def calculate_streak(logs):
+    if not logs:
+        return 0
+    dates = sorted(set(
+        log.created_at.date() for log in logs
+    ), reverse=True)
+    streak = 0
+    today = datetime.utcnow().date()
+    for i, date in enumerate(dates):
+        expected = today - timedelta(days=i)
+        if date == expected:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def get_personal_bests(logs):
+    bests = {}
+    for log in logs:
+        if log.sport not in bests or (log.score or 0) > bests[log.sport]:
+            bests[log.sport] = log.score or 0
+    return bests
+
+
+def get_weekly_challenge(logs):
+    now = datetime.utcnow()
+    week_start = now - timedelta(days=now.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0)
+    weekly_logs = [l for l in logs if l.created_at >= week_start]
+    target_score = 80
+    best_this_week = max((l.score or 0) for l in weekly_logs) if weekly_logs else 0
+    completed = best_this_week >= target_score
+    return {
+        "title": f"Score {target_score}+ this week",
+        "description": f"Upload a video and score {target_score} or higher",
+        "target": target_score,
+        "best_this_week": round(best_this_week),
+        "completed": completed,
+        "sessions_this_week": len(weekly_logs),
+    }
+
+
+def check_personal_best(logs, latest_log):
+    if not latest_log or not latest_log.score:
+        return None
+    sport_logs = [l for l in logs if l.sport == latest_log.sport and l.id != latest_log.id]
+    if not sport_logs:
+        return None
+    prev_best = max((l.score or 0) for l in sport_logs)
+    if latest_log.score > prev_best:
+        return {
+            "is_personal_best": True,
+            "sport": latest_log.sport,
+            "new_best": round(latest_log.score),
+            "previous_best": round(prev_best),
+            "improvement": round(latest_log.score - prev_best, 1),
+        }
+    return None
 
 
 @router.get("/")
@@ -39,10 +101,16 @@ def get_dashboard(
         for log in logs
     ]
 
-    # Trial info
-    trial_days = 0
+    streak = calculate_streak(logs)
+    personal_bests = get_personal_bests(logs)
+    weekly_challenge = get_weekly_challenge(logs)
+
+    latest_log = logs[-1] if logs else None
+    personal_best_alert = check_personal_best(logs, latest_log)
+
     is_trial = False
     trial_expired = False
+    trial_days = 0
 
     if user.subscription:
         is_trial = user.subscription.is_trial
@@ -57,6 +125,10 @@ def get_dashboard(
         "trial_days_remaining": trial_days,
         "total_sessions": len(logs),
         "average_score": safe_average(scores),
+        "streak": streak,
+        "personal_bests": personal_bests,
+        "weekly_challenge": weekly_challenge,
+        "personal_best_alert": personal_best_alert,
         "progress": progress,
     }
 
