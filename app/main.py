@@ -5,13 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db.database import engine
+from app.db.database import engine, Base
 import app.db.models
-from app.db.database import Base
 from app.routers import auth, analyze, athletes, dashboard, notifications, performance_logs, webhooks
 from services.scheduler import start_scheduler
-from app.routers.athletes import router as athletes_router
-app.include_router(athletes_router)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,7 +55,11 @@ app.include_router(webhooks.router)
 
 @app.get("/")
 def root():
-    return {"service": "LevelUp AI Coaching API", "status": "running", "version": "1.0.0"}
+    return {
+        "service": "LevelUp AI Coaching API",
+        "status": "running",
+        "version": "1.0.0",
+    }
 
 
 @app.get("/health")
