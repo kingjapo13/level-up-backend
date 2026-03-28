@@ -34,14 +34,15 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
         logger.error(f"Failed to save uploaded file: {e}")
         return {"error": "Failed to save video. Please try again."}
 
-    # 3. Verify file is valid
+    # 3. Verify file
     file_size = os.path.getsize(filename)
     logger.info(f"User {user.id} uploaded {filename} ({file_size} bytes) for sport={sport}")
 
     if file_size < 1000:
         return {"error": "Video file is too small or corrupted. Please try uploading again."}
 
-    # 4. Always convert and compress video for compatibility and memory
+    # 4. Convert video — keep original path for annotation
+    original_filename = filename
     try:
         from analysis.pose_detection import convert_video
         converted_filename = convert_video(filename)
@@ -50,7 +51,7 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
         logger.warning(f"Video conversion failed: {e}")
         converted_filename = filename
 
-    # 5. Get previous score for improvement tracking
+    # 5. Get previous score
     try:
         last_log = (
             db.query(PerformanceLog)
@@ -81,19 +82,31 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     if "error" in result:
         return result
 
-    # 7. Enrich with GPT feedback for Pro/Elite users
-    if has_feature(user, "detailed_feedback"):
+    # 7. GPT feedback for Pro/Elite users
+    if has_feature(user, "gpt_feedback"):
         try:
             gpt = generate_gpt_feedback(
                 metrics=result,
                 sport=sport,
-                personality=user.personality_mode or "supportive",
+                personality=getattr(user, 'personality_mode', None) or "supportive",
             )
             result["gpt_feedback"] = gpt
         except Exception as e:
             logger.warning(f"GPT feedback failed: {e}")
 
-    # 8. Save performance log with full metrics
+    # 8. Training plan for Pro/Elite users
+    if has_feature(user, "training_plan"):
+        try:
+            from app.gpt_coach import generate_training_plan
+            training_plan = generate_training_plan(
+                metrics=result,
+                sport=sport,
+            )
+            result["training_plan"] = training_plan
+        except Exception as e:
+            logger.warning(f"Training plan failed: {e}")
+
+    # 9. Save performance log with full metrics
     try:
         log = PerformanceLog(
             user_id=user.id,
@@ -116,7 +129,7 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
     except Exception as e:
         logger.error(f"Failed to save performance log: {e}")
 
-    # 9. Push notification
+    # 10. Push notification
     _notify_complete(user)
 
     return result

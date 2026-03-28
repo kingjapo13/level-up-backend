@@ -94,6 +94,7 @@ def analyze_video(
     sport: str = "squat",
     previous_score: Optional[int] = None,
 ) -> Dict[str, Any]:
+    converted_filename = video_path  # track for cleanup
     """
     Full video analysis pipeline:
     1. Extract pose landmarks
@@ -191,10 +192,12 @@ def analyze_video(
         "metrics": metrics,
     }
 
-    # 11. Generate annotated frames
+   # 11. Generate annotated frames
+    # Use converted video path — it still exists at this point
     try:
+        from analysis.pose_detection import extract_annotated_frames
         annotated = extract_annotated_frames(
-            video_path=video_path,
+            video_path=converted_filename,
             landmarks_per_frame=frames_landmarks,
             form_issues=form_issues,
             num_frames=3,
@@ -202,8 +205,16 @@ def analyze_video(
         result["annotated_frames"] = annotated
         logger.info(f"Added {len(annotated)} annotated frames to result")
     except Exception as e:
-        logger.warning(f"Annotated frames failed: {e}")
+        logger.warning(f"Annotated frames failed: {e}", exc_info=True)
         result["annotated_frames"] = []
+
+    # Clean up video file after annotation
+    try:
+        if os.path.exists(converted_filename):
+            os.remove(converted_filename)
+            logger.info(f"Cleaned up video: {converted_filename}")
+    except Exception as e:
+        logger.warning(f"Could not clean up video: {e}")
 
     return result
 

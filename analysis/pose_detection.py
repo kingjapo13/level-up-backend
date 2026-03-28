@@ -211,7 +211,7 @@ def get_landmark_point(
         return None
     return (x, y, z)
 
-
+logger.info(f"Starting annotation: video={video_path}, landmarks={len(landmarks_per_frame)}, issues={form_issues}")
 def extract_annotated_frames(
     video_path: str,
     landmarks_per_frame: List[Dict[str, tuple]],
