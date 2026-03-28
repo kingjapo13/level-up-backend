@@ -9,6 +9,19 @@ from sports.baseball import BaseballAnalyzer
 from sports.volleyball import VolleyballAnalyzer
 from sports.boxing import BoxingAnalyzer
 
+try:
+    from sports.squat import SquatAnalyzer
+    _has_squat = True
+except ImportError:
+    _has_squat = False
+
+try:
+    from sports.curl import CurlAnalyzer
+    _has_curl = True
+except ImportError:
+    _has_curl = False
+
+
 SPORT_REGISTRY: Dict[str, SportAnalyzer] = {
     "basketball": BasketballAnalyzer(),
     "golf": GolfAnalyzer(),
@@ -19,6 +32,11 @@ SPORT_REGISTRY: Dict[str, SportAnalyzer] = {
     "volleyball": VolleyballAnalyzer(),
     "boxing": BoxingAnalyzer(),
 }
+
+if _has_squat:
+    SPORT_REGISTRY["squat"] = SquatAnalyzer()
+if _has_curl:
+    SPORT_REGISTRY["curl"] = CurlAnalyzer()
 
 
 def get_sport_analyzer(name: str) -> SportAnalyzer:

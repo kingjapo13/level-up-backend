@@ -129,11 +129,8 @@ def extract_landmarks_from_video(
 
     cap.release()
 
-    if '_conv' in video_path:
-        try:
-            os.remove(video_path)
-        except Exception:
-            pass
+    # DON'T delete the video here — we need it for annotated frames
+    # Cleanup happens in process_video.py after annotation is complete
 
     logger.info(f"Extracted landmarks from {len(frames_landmarks)} frames.")
     return frames_landmarks

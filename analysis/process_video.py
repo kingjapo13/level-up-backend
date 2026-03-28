@@ -106,8 +106,9 @@ def analyze_video(
     """
     logger.info(f"Starting analysis: sport={sport}, video={video_path}")
 
-    # 1. Extract landmarks
+    # 1. Extract landmarks (video file preserved for annotation)
     frames_landmarks = extract_landmarks_from_video(video_path)
+    converted_filename = video_path
 
     if not frames_landmarks:
         return {
@@ -192,10 +193,8 @@ def analyze_video(
         "metrics": metrics,
     }
 
-   # 11. Generate annotated frames
-    # Use converted video path — it still exists at this point
+   # 11. Generate annotated frames using the same video
     try:
-        from analysis.pose_detection import extract_annotated_frames
         annotated = extract_annotated_frames(
             video_path=converted_filename,
             landmarks_per_frame=frames_landmarks,
@@ -208,7 +207,7 @@ def analyze_video(
         logger.warning(f"Annotated frames failed: {e}", exc_info=True)
         result["annotated_frames"] = []
 
-    # Clean up video file after annotation
+    # Clean up video file now that annotation is done
     try:
         if os.path.exists(converted_filename):
             os.remove(converted_filename)
