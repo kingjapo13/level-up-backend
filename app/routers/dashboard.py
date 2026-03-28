@@ -60,7 +60,10 @@ def get_weekly_challenge(logs):
 def check_personal_best(logs, latest_log):
     if not latest_log or not latest_log.score:
         return None
-    sport_logs = [l for l in logs if l.sport == latest_log.sport and l.id != latest_log.id]
+    sport_logs = [
+        l for l in logs
+        if l.sport == latest_log.sport and l.id != latest_log.id
+    ]
     if not sport_logs:
         return None
     prev_best = max((l.score or 0) for l in sport_logs)
@@ -93,6 +96,7 @@ def get_dashboard(
 
     progress = [
         {
+            "id": log.id,
             "date": log.created_at,
             "sport": log.sport,
             "score": log.score,

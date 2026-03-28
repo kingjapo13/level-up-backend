@@ -93,7 +93,7 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
         except Exception as e:
             logger.warning(f"GPT feedback failed: {e}")
 
-    # 8. Save performance log
+    # 8. Save performance log with full metrics
     try:
         log = PerformanceLog(
             user_id=user.id,
@@ -104,6 +104,11 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
             metrics={
                 "form_issues": result.get("form_issues", []),
                 "coaching_tips": result.get("coaching_tips", []),
+                "summary": result.get("summary", ""),
+                "gpt_feedback": result.get("gpt_feedback", ""),
+                "improvement": result.get("improvement", ""),
+                "training_plan": result.get("training_plan", None),
+                "annotated_frames": result.get("annotated_frames", []),
             },
         )
         db.add(log)
