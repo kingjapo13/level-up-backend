@@ -208,19 +208,15 @@ def get_landmark_point(
         return None
     return (x, y, z)
 
-logger.info(f"Starting annotation: video={video_path}, landmarks={len(landmarks_per_frame)}, issues={form_issues}")
 def extract_annotated_frames(
     video_path: str,
     landmarks_per_frame: List[Dict[str, tuple]],
     form_issues: List[str],
     num_frames: int = 3,
 ) -> List[str]:
-    """
-    Extracts key frames and draws color-coded skeleton overlay.
-    Green = good joints, Red = joints with issues.
-    Returns list of base64 encoded image strings.
-    """
+    logger.info(f"Starting annotation: video={video_path}, landmarks={len(landmarks_per_frame)}, issues={form_issues}")
     import base64
+    ...
 
     if not landmarks_per_frame:
         logger.warning("No landmarks available for annotation")
