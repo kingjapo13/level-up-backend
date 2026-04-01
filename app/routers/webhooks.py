@@ -12,8 +12,6 @@ from app.models.subscription import Subscription
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-TIER_BY_PRICE = {}
-
 
 def get_tier_by_price_id(price_id: str) -> str:
     pro_price = os.getenv("STRIPE_PRICE_ID_PRO", "")
@@ -64,7 +62,9 @@ async def stripe_webhook(request: Request):
             items = sub.get("items", {}).get("data", [])
             if items:
                 price_id = items[0].get("price", {}).get("id")
-            _handle_subscription_updated(db, customer_id, status, price_id, sub.get("id"))
+            _handle_subscription_updated(
+                db, customer_id, status, price_id, sub.get("id")
+            )
 
         elif event_type == "customer.subscription.deleted":
             sub = event["data"]["object"]
@@ -75,7 +75,9 @@ async def stripe_webhook(request: Request):
             invoice = event["data"]["object"]
             customer_id = invoice.get("customer")
             customer_email = invoice.get("customer_email")
-            logger.warning(f"Payment failed for customer {customer_id} ({customer_email})")
+            logger.warning(
+                f"Payment failed for customer {customer_id} ({customer_email})"
+            )
 
     except Exception as e:
         logger.error(f"Webhook processing error: {e}", exc_info=True)
@@ -85,7 +87,9 @@ async def stripe_webhook(request: Request):
     return {"status": "ok"}
 
 
-def _handle_new_subscription(db: Session, email: str, customer_id: str, subscription_id: str):
+def _handle_new_subscription(
+    db: Session, email: str, customer_id: str, subscription_id: str
+):
     if not email:
         logger.warning("No email in checkout session")
         return
@@ -134,7 +138,11 @@ def _handle_new_subscription(db: Session, email: str, customer_id: str, subscrip
 
 
 def _handle_subscription_updated(
-    db: Session, customer_id: str, status: str, price_id: str, subscription_id: str
+    db: Session,
+    customer_id: str,
+    status: str,
+    price_id: str,
+    subscription_id: str,
 ):
     subscription = db.query(Subscription).filter(
         Subscription.stripe_customer_id == customer_id
@@ -172,4 +180,3 @@ def _handle_subscription_cancelled(db: Session, customer_id: str):
     subscription.updated_at = datetime.utcnow()
     db.commit()
     logger.info(f"Subscription cancelled for customer {customer_id}")
-    ```
