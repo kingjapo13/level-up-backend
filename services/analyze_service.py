@@ -1,343 +1,227 @@
 import os
+import uuid
+import shutil
 import logging
-import json
+
+from sqlalchemy.orm import Session
+
+from app.models.performance_log import PerformanceLog
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-def generate_gpt_feedback(metrics: dict, sport: str, personality: str = "supportive") -> str:
-    """Generates personalized GPT coaching feedback."""
-    from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    personality_prompts = {
-        "supportive": "Be encouraging and positive. Celebrate wins before addressing issues.",
-        "hardcore": "Be direct and intense. No sugarcoating — just results focused.",
-        "technical": "Be data-driven and precise. Focus on biomechanics and specific metrics.",
+def has_feature(user: User, feature: str) -> bool:
+    """Check if user's subscription tier has a feature."""
+    if not user.subscription:
+        return False
+    tier = user.subscription.effective_tier
+    features = {
+        "trial":   {"gpt_feedback": True,  "training_plan": True,  "athlete_matching": False},
+        "pro":     {"gpt_feedback": True,  "training_plan": False, "athlete_matching": False},
+        "elite":   {"gpt_feedback": True,  "training_plan": True,  "athlete_matching": True},
+        "expired": {"gpt_feedback": False, "training_plan": False, "athlete_matching": False},
+        "free":    {"gpt_feedback": False, "training_plan": False, "athlete_matching": False},
+    }
+    return features.get(tier, {}).get(feature, False)
+
+
+def enforce_upload_limit(user: User, db: Session):
+    """Raises an exception if user has exceeded their upload limit."""
+    from fastapi import HTTPException
+    from datetime import datetime, timedelta
+
+    if not user.subscription:
+        raise HTTPException(status_code=403, detail="No active subscription found.")
+
+    tier = user.subscription.effective_tier
+
+    if tier == "expired":
+        raise HTTPException(
+            status_code=403,
+            detail="Your free trial has expired. Please upgrade to continue."
+        )
+
+    limits = {
+        "trial": 10,
+        "pro": 1,
+        "elite": 100,
+        "free": 0,
     }
 
-    personality_style = personality_prompts.get(personality, personality_prompts["supportive"])
+    limit = limits.get(tier, 0)
+    if limit == 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Please upgrade to Pro or Elite to upload videos."
+        )
 
-    form_issues = metrics.get("form_issues", [])
-    coaching_tips = metrics.get("coaching_tips", [])
-    score = metrics.get("score", 0)
-    reps = metrics.get("reps_completed", 0)
+    # Count uploads this month
+    now = datetime.utcnow()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    issues_text = "\n".join(f"- {i}" for i in form_issues) if form_issues else "None detected"
-    tips_text = "\n".join(f"- {t if isinstance(t, str) else t.get('tip', '')}" for t in coaching_tips) if coaching_tips else "None"
+    count = db.query(PerformanceLog).filter(
+        PerformanceLog.user_id == user.id,
+        PerformanceLog.created_at >= month_start,
+    ).count()
 
-    prompt = f"""You are an expert {sport} coach giving feedback to an athlete after analyzing their training video.
+    if count >= limit:
+        raise HTTPException(
+            status_code=403,
+            detail=f"You have reached your {limit} upload limit for this month. Upgrade to Elite for 100 uploads/month."
+        )
 
-Performance data:
-- Sport: {sport}
-- Score: {score}/100
-- Reps completed: {reps}
-- Form issues detected: {issues_text}
-- Coaching tips generated: {tips_text}
 
-Coaching style: {personality_style}
+async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
+    """Main video analysis pipeline."""
 
-Write 2-3 paragraphs of personalized coaching feedback. Be specific to their performance data. Reference their score and specific form issues. End with one motivational sentence. Keep it under 200 words."""
+    # 1. Check upload limit
+    enforce_upload_limit(user, db)
+
+    # 2. Save uploaded file
+    ext = os.path.splitext(file.filename)[-1].lower() or ".mp4"
+    filename = f"{UPLOAD_DIR}/{uuid.uuid4()}{ext}"
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.8,
-        )
-        return response.choices[0].message.content.strip()
+        with open(filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            buffer.flush()
+            os.fsync(buffer.fileno())
     except Exception as e:
-        logger.warning(f"GPT feedback failed: {e}")
-        return _fallback_feedback(sport, score, form_issues)
+        logger.error(f"Failed to save uploaded file: {e}")
+        return {"error": "Failed to save video. Please try again."}
 
+    file_size = os.path.getsize(filename)
+    logger.info(f"User {user.id} uploaded {filename} ({file_size} bytes) for sport={sport}")
 
-def generate_training_plan(metrics: dict, sport: str) -> dict:
-    """Generates a 3-day AI training plan based on performance."""
-    from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    if file_size < 1000:
+        return {"error": "Video file is too small or corrupted. Please try uploading again."}
 
-    form_issues = metrics.get("form_issues", [])
-    score = metrics.get("score", 0)
-    issues_text = "\n".join(f"- {i}" for i in form_issues) if form_issues else "General improvement"
-
-    prompt = f"""You are an expert {sport} coach. Create a 3-day training plan to improve this athlete's performance.
-
-Current performance:
-- Sport: {sport}
-- Score: {score}/100
-- Issues to address: {issues_text}
-
-Respond ONLY with valid JSON in exactly this format with no extra text:
-{{
-  "plan_title": "3-Day {sport.title()} Improvement Plan",
-  "focus": "Main focus area based on issues",
-  "days": [
-    {{
-      "day": 1,
-      "title": "Day 1 - Title",
-      "focus": "Focus area",
-      "duration_minutes": 30,
-      "drills": [
-        {{
-          "name": "Drill name",
-          "sets": 3,
-          "reps": "10 reps",
-          "instruction": "How to perform it",
-          "targets": "What it improves"
-        }}
-      ]
-    }}
-  ]
-}}
-
-Generate exactly 3 days with exactly 3-4 drills each. Focus on fixing the detected issues."""
-
+    # 3. Convert video
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1200,
-            temperature=0.7,
-        )
-        text = response.choices[0].message.content.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
+        from analysis.pose_detection import convert_video
+        converted_filename = convert_video(filename)
+        logger.info(f"Using converted video: {converted_filename}")
     except Exception as e:
-        logger.warning(f"Training plan failed: {e}")
-        return _fallback_training_plan(sport)
+        logger.warning(f"Video conversion failed: {e}")
+        converted_filename = filename
 
-
-def generate_technique_guide(sport: str, form_issues: list, personality: str = "supportive") -> dict:
-    """Generates a technique guide with correct form steps and reference image search terms."""
-    from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    issues_text = "\n".join(form_issues) if form_issues else "No major issues detected"
-
-    prompt = f"""You are an expert {sport} coach. Generate a technique guide for correct {sport} form.
-
-Form issues detected in this athlete's video:
-{issues_text}
-
-Respond ONLY with valid JSON in exactly this format with no extra text:
-{{
-  "title": "Perfect {sport.title()} Form Guide",
-  "intro": "One sentence intro about correct {sport} form",
-  "steps": [
-    {{
-      "number": 1,
-      "title": "Step title",
-      "description": "Detailed description of this form checkpoint",
-      "cue": "Short coaching cue like 'chest up' or 'knees out'"
-    }}
-  ],
-  "key_mistakes": [
-    {{
-      "mistake": "Common mistake name",
-      "fix": "How to fix it"
-    }}
-  ],
-  "image_searches": [
-    "specific search term for correct {sport} form image 1",
-    "specific search term for correct {sport} form image 2",
-    "specific search term for correct {sport} form image 3"
-  ],
-  "pro_tip": "One advanced tip from a professional coach perspective"
-}}
-
-Generate exactly 4-5 steps focused on fixing the detected issues. Generate exactly 3 image search terms."""
-
+    # 4. Get previous score for comparison
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
-            temperature=0.7,
+        last_log = (
+            db.query(PerformanceLog)
+            .filter(
+                PerformanceLog.user_id == user.id,
+                PerformanceLog.sport == sport,
+            )
+            .order_by(PerformanceLog.created_at.desc())
+            .first()
         )
-        text = response.choices[0].message.content.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
+        previous_score = int(last_log.score) if last_log and last_log.score else None
     except Exception as e:
-        logger.warning(f"Technique guide failed: {e}")
-        return _fallback_technique_guide(sport, form_issues)
+        logger.warning(f"Could not get previous score: {e}")
+        previous_score = None
 
+    # 5. Run pose analysis
+    try:
+        from analysis.process_video import analyze_video as run_analysis
+        result = run_analysis(
+            converted_filename,
+            sport=sport,
+            previous_score=previous_score,
+        )
+    except Exception as e:
+        logger.error(f"Analysis crashed: {e}", exc_info=True)
+        return {"error": f"Analysis failed: {str(e)}"}
 
-def _fallback_feedback(sport: str, score: float, form_issues: list) -> str:
-    """Fallback feedback if GPT fails."""
-    if score >= 80:
-        return f"Excellent {sport} performance! Your score of {score}/100 shows strong technique. Keep up the consistent work and focus on the small details to reach elite level."
-    elif score >= 60:
-        return f"Good effort on your {sport} training! Your score of {score}/100 shows solid fundamentals. Focus on the form issues identified to push your score higher. Consistency is key."
-    else:
-        return f"Keep working on your {sport} technique! Your score of {score}/100 shows room for improvement. Focus on the basics first — proper form will come with dedicated practice."
+    if "error" in result:
+        return result
 
+    # 6. Get coach personality
+    personality = "supportive"
+    try:
+        from app.models.user import User as UserModel
+        if hasattr(user, 'personality_mode') and user.personality_mode:
+            personality = user.personality_mode
+    except Exception:
+        pass
 
-def _fallback_training_plan(sport: str) -> dict:
-    """Fallback training plan if GPT fails."""
-    return {
-        "plan_title": f"3-Day {sport.title()} Improvement Plan",
-        "focus": "Form and technique fundamentals",
-        "days": [
-            {
-                "day": 1,
-                "title": "Day 1 - Foundation",
-                "focus": "Basic technique",
-                "duration_minutes": 30,
-                "drills": [
-                    {
-                        "name": "Warm Up",
-                        "sets": 1,
-                        "reps": "5 minutes",
-                        "instruction": "Light cardio and dynamic stretching",
-                        "targets": "Injury prevention"
-                    },
-                    {
-                        "name": "Form Practice",
-                        "sets": 3,
-                        "reps": "10 reps",
-                        "instruction": f"Slow controlled {sport} movement focusing on technique",
-                        "targets": "Muscle memory"
-                    },
-                    {
-                        "name": "Cool Down",
-                        "sets": 1,
-                        "reps": "5 minutes",
-                        "instruction": "Static stretching",
-                        "targets": "Recovery"
-                    },
-                ]
+    # 7. GPT feedback
+    if has_feature(user, "gpt_feedback"):
+        try:
+            from app.gpt_coach import generate_gpt_feedback
+            gpt = generate_gpt_feedback(
+                metrics=result,
+                sport=sport,
+                personality=personality,
+            )
+            result["gpt_feedback"] = gpt
+        except Exception as e:
+            logger.warning(f"GPT feedback failed: {e}")
+
+    # 8. Training plan
+    if has_feature(user, "training_plan"):
+        try:
+            from app.gpt_coach import generate_training_plan
+            training_plan = generate_training_plan(
+                metrics=result,
+                sport=sport,
+            )
+            result["training_plan"] = training_plan
+        except Exception as e:
+            logger.warning(f"Training plan failed: {e}")
+
+    # 9. Technique guide
+    if has_feature(user, "gpt_feedback"):
+        try:
+            from app.gpt_coach import generate_technique_guide
+            technique_guide = generate_technique_guide(
+                sport=sport,
+                form_issues=result.get("form_issues", []),
+                personality=personality,
+            )
+            result["technique_guide"] = technique_guide
+        except Exception as e:
+            logger.warning(f"Technique guide failed: {e}")
+
+    # 10. Save performance log
+    try:
+        log = PerformanceLog(
+            user_id=user.id,
+            sport=sport,
+            score=result.get("score"),
+            reps=result.get("reps_completed"),
+            video_path=converted_filename,
+            metrics={
+                "form_issues": result.get("form_issues", []),
+                "coaching_tips": result.get("coaching_tips", []),
+                "summary": result.get("summary", ""),
+                "gpt_feedback": result.get("gpt_feedback", ""),
+                "improvement": result.get("improvement", ""),
+                "training_plan": result.get("training_plan", None),
+                "annotated_frames": result.get("annotated_frames", []),
+                "technique_guide": result.get("technique_guide", None),
             },
-            {
-                "day": 2,
-                "title": "Day 2 - Strength",
-                "focus": "Building power",
-                "duration_minutes": 35,
-                "drills": [
-                    {
-                        "name": "Core Stability",
-                        "sets": 3,
-                        "reps": "30 seconds",
-                        "instruction": "Plank hold with focus on breathing",
-                        "targets": "Core strength"
-                    },
-                    {
-                        "name": "Sport Specific Drill",
-                        "sets": 4,
-                        "reps": "8 reps",
-                        "instruction": f"Focused {sport} technique drill at 75% intensity",
-                        "targets": "Power and control"
-                    },
-                    {
-                        "name": "Balance Work",
-                        "sets": 2,
-                        "reps": "45 seconds each side",
-                        "instruction": "Single leg balance with eyes closed",
-                        "targets": "Stability"
-                    },
-                ]
-            },
-            {
-                "day": 3,
-                "title": "Day 3 - Game Speed",
-                "focus": "Speed and reaction",
-                "duration_minutes": 40,
-                "drills": [
-                    {
-                        "name": "Speed Drill",
-                        "sets": 5,
-                        "reps": "6 reps",
-                        "instruction": f"Full speed {sport} movement with proper form",
-                        "targets": "Explosiveness"
-                    },
-                    {
-                        "name": "Reaction Training",
-                        "sets": 3,
-                        "reps": "10 reps",
-                        "instruction": "Partner or solo reaction drill",
-                        "targets": "Reaction time"
-                    },
-                    {
-                        "name": "Full Practice",
-                        "sets": 1,
-                        "reps": "10 minutes",
-                        "instruction": f"Apply everything learned in a full {sport} practice session",
-                        "targets": "Integration"
-                    },
-                ]
-            },
-        ]
-    }
+        )
+        db.add(log)
+        db.commit()
+        logger.info(f"Saved performance log for user {user.id}")
+    except Exception as e:
+        logger.error(f"Failed to save performance log: {e}")
 
+    # 11. Push notification
+    try:
+        if hasattr(user, 'device_token') and user.device_token:
+            from services.push_service import send_push_notification
+            send_push_notification(
+                token=user.device_token,
+                title="Analysis Ready 🏆",
+                body="Your LevelUp AI coaching feedback is ready to view.",
+            )
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
 
-def _fallback_technique_guide(sport: str, form_issues: list) -> dict:
-    """Fallback technique guide if GPT fails."""
-    guides = {
-        "squat": {
-            "title": "Perfect Squat Form Guide",
-            "intro": "A proper squat builds strength safely and effectively.",
-            "steps": [
-                {"number": 1, "title": "Foot Position", "description": "Stand with feet shoulder-width apart, toes pointed slightly outward at 15-30 degrees.", "cue": "Shoulder width"},
-                {"number": 2, "title": "Brace Your Core", "description": "Take a deep breath and brace your core as if you are about to take a punch.", "cue": "Big breath, brace"},
-                {"number": 3, "title": "Initiate the Descent", "description": "Push your hips back first, then bend your knees. Keep your chest up and back straight.", "cue": "Hips back first"},
-                {"number": 4, "title": "Hit Depth", "description": "Squat until your thighs are parallel to the floor or below. Keep knees tracking over toes.", "cue": "Thighs parallel"},
-                {"number": 5, "title": "Drive Up", "description": "Push through your heels to stand back up. Keep chest tall throughout the movement.", "cue": "Push through heels"},
-            ],
-            "key_mistakes": [
-                {"mistake": "Knee Cave", "fix": "Push knees outward — think about spreading the floor apart with your feet"},
-                {"mistake": "Forward Lean", "fix": "Keep chest up and look slightly above horizontal"},
-                {"mistake": "Heel Rise", "fix": "Push weight through your heels not your toes"},
-            ],
-            "image_searches": [
-                "proper squat form side view",
-                "squat depth parallel correct technique",
-                "squat knee alignment correct form"
-            ],
-            "pro_tip": "Record yourself from the side to check your depth and back angle every few sessions.",
-        },
-        "basketball": {
-            "title": "Perfect Basketball Shooting Form",
-            "intro": "Consistent shooting form is the foundation of a reliable shot.",
-            "steps": [
-                {"number": 1, "title": "Athletic Stance", "description": "Feet shoulder-width apart, knees slightly bent, weight balanced on balls of feet.", "cue": "Athletic stance"},
-                {"number": 2, "title": "Hand Position", "description": "Shooting hand under the ball, guide hand on the side. Fingers spread, ball on fingertips not palm.", "cue": "Fingertips not palm"},
-                {"number": 3, "title": "Elbow Alignment", "description": "Shooting elbow directly under the ball forming an L-shape. Elbow points at the basket.", "cue": "Elbow under ball"},
-                {"number": 4, "title": "Rise and Extend", "description": "Rise up through your legs first then extend your shooting arm in one fluid motion.", "cue": "Legs then arms"},
-                {"number": 5, "title": "Follow Through", "description": "Snap your wrist forward, fingers pointing down at the basket. Hold the follow through.", "cue": "Goose neck follow through"},
-            ],
-            "key_mistakes": [
-                {"mistake": "Side Spin", "fix": "Keep your guide hand still — it should not push the ball"},
-                {"mistake": "Flat Shot", "fix": "Aim for the back of the rim and increase your arc"},
-                {"mistake": "Rushing", "fix": "Slow down and focus on one fluid motion from legs to fingertips"},
-            ],
-            "image_searches": [
-                "basketball shooting form correct technique",
-                "NBA shooting form elbow alignment",
-                "basketball follow through wrist snap"
-            ],
-            "pro_tip": "Practice form shooting from 3 feet away from the basket until the motion is automatic.",
-        },
-    }
-
-    default = {
-        "title": f"Perfect {sport.title()} Form Guide",
-        "intro": f"Mastering correct {sport} technique will improve your performance and prevent injury.",
-        "steps": [
-            {"number": 1, "title": "Starting Position", "description": f"Set up your body correctly before beginning the {sport} movement.", "cue": "Athletic stance"},
-            {"number": 2, "title": "Core Engagement", "description": "Keep your core braced throughout the entire movement for stability.", "cue": "Brace your core"},
-            {"number": 3, "title": "Movement Execution", "description": f"Execute the {sport} movement with controlled deliberate motion.", "cue": "Slow and controlled"},
-            {"number": 4, "title": "Follow Through", "description": "Complete the full range of motion on every rep for maximum benefit.", "cue": "Full range of motion"},
-        ],
-        "key_mistakes": [
-            {"mistake": "Poor Posture", "fix": "Keep chest up and back straight throughout"},
-            {"mistake": "Rushing", "fix": "Slow down and focus on technique over speed"},
-        ],
-        "image_searches": [
-            f"correct {sport} form technique",
-            f"proper {sport} body position",
-            f"{sport} coaching form guide"
-        ],
-        "pro_tip": f"Film yourself from the side every few sessions to track your {sport} form improvements.",
-    }
-
-    return guides.get(sport.lower(), default)
+    return result
