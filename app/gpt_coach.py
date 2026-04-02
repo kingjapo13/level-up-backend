@@ -24,34 +24,75 @@ PERSONALITY_PROMPTS = {
 }
 
 
-def generate_gpt_feedback(
-    metrics: dict,
-    sport: str = "general",
-    personality: str = "supportive",
-) -> Optional[str]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key or api_key in ("sk-xxxxx", "sk_test"):
-        logger.warning("OPENAI_API_KEY not configured")
-        return None
+def generate_gpt_feedback(metrics: dict, sport: str, personality: str = "supportive") -> str:
+    """Generates detailed personalized GPT coaching feedback."""
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    personality_prompts = {
+        "supportive": "Be encouraging and positive. Celebrate what they did well before addressing issues.",
+        "hardcore": "Be direct and intense. No sugarcoating — focus purely on what needs to improve.",
+        "technical": "Be data-driven and precise. Focus on biomechanics, angles, and specific metrics.",
+    }
+
+    personality_style = personality_prompts.get(
+        personality, personality_prompts["supportive"]
+    )
+
+    form_issues = metrics.get("form_issues", [])
+    coaching_tips = metrics.get("coaching_tips", [])
+    score = metrics.get("score", 0)
+    reps = metrics.get("reps_completed", 0)
+
+    issues_text = (
+        "\n".join(f"- {i}" for i in form_issues)
+        if form_issues else "No major form issues detected"
+    )
+    tips_text = (
+        "\n".join(
+            f"- {t if isinstance(t, str) else t.get('tip', '')}"
+            for t in coaching_tips
+        )
+        if coaching_tips else "None"
+    )
+
+    prompt = f"""You are an expert {sport} coach analyzing an athlete's training video.
+
+Here is their performance data:
+- Sport: {sport}
+- Performance Score: {score}/100
+- Reps completed: {reps}
+- Form issues detected by AI: 
+{issues_text}
+- Coaching tips generated:
+{tips_text}
+
+Coaching style: {personality_style}
+
+Write detailed coaching feedback with exactly these 3 sections:
+
+**What You Did Well:**
+Write 2-3 specific sentences about what they did correctly based on their score and any lack of issues. Be specific to {sport}.
+
+**What Needs Improvement:**
+Write 2-3 specific sentences directly addressing each form issue detected. Give concrete actionable advice for each one. If no issues, mention areas to take to the next level.
+
+**Your Action Plan:**
+Write 2-3 specific sentences with exactly what they should focus on in their next training session to improve their score. Be very specific to {sport} technique.
+
+Keep the total response under 250 words. Be specific, not generic. Reference their actual score and actual form issues."""
 
     try:
-        import httpx
-        from openai import OpenAI
-        http_client = httpx.Client()
-        client = OpenAI(api_key=api_key, http_client=http_client)
-
-        system_prompt = PERSONALITY_PROMPTS.get(
-            personality, PERSONALITY_PROMPTS["supportive"]
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.7,
         )
-
-        score = metrics.get("score", 0)
-        reps = metrics.get("reps_completed", 0)
-        form_issues = metrics.get("form_issues", [])
-        tips = metrics.get("coaching_tips", [])
-        summary = metrics.get("summary", "")
-        improvement = metrics.get("improvement", "")
-
-        user_prompt = f"""Athlete Performance Analysis — {sport.upper()}
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning(f"GPT feedback failed: {e}")
+        return _fallback_feedback(sport, score, form_issues)
 
 Score: {score}/100
 Reps Completed: {reps}
