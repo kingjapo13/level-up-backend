@@ -46,6 +46,7 @@ async def analyze(
             sport=sport,
             db=db,
             user=user,
+            personality=personality,
         )
     except HTTPException:
         raise
