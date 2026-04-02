@@ -93,6 +93,18 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
             result["gpt_feedback"] = gpt
         except Exception as e:
             logger.warning(f"GPT feedback failed: {e}")
+            # Technique guide
+    if has_feature(user, "gpt_feedback"):
+        try:
+            from app.gpt_coach import generate_technique_guide
+            technique_guide = generate_technique_guide(
+                sport=sport,
+                form_issues=result.get("form_issues", []),
+                personality=getattr(user, 'personality_mode', None) or "supportive",
+            )
+            result["technique_guide"] = technique_guide
+        except Exception as e:
+            logger.warning(f"Technique guide failed: {e}")
 
     # 8. Training plan for Pro/Elite users
     if has_feature(user, "training_plan"):
@@ -122,6 +134,7 @@ async def analyze_video(file, sport: str, db: Session, user: User) -> dict:
                 "improvement": result.get("improvement", ""),
                 "training_plan": result.get("training_plan", None),
                 "annotated_frames": result.get("annotated_frames", []),
+                "technique_guide": result.get("technique_guide", None),
             },
         )
         db.add(log)
