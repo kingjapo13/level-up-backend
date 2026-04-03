@@ -8,7 +8,11 @@ logger = logging.getLogger(__name__)
 def generate_gpt_feedback(metrics: dict, sport: str, personality: str = "supportive") -> str:
     """Generates detailed personalized GPT coaching feedback."""
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    import httpx
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        http_client=httpx.Client(),
+    )
 
     personality_prompts = {
         "supportive": "Be encouraging and positive. Celebrate what they did well before addressing issues.",
@@ -79,7 +83,11 @@ Keep the total response under 250 words. Be specific not generic. Reference thei
 def generate_training_plan(metrics: dict, sport: str) -> dict:
     """Generates a 3-day AI training plan based on performance."""
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    import httpx
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        http_client=httpx.Client(),
+    )
 
     form_issues = metrics.get("form_issues", [])
     score = metrics.get("score", 0)
@@ -139,7 +147,11 @@ Generate exactly 3 days with exactly 3-4 drills each. Focus on fixing the detect
 def generate_technique_guide(sport: str, form_issues: list, personality: str = "supportive") -> dict:
     """Generates a technique guide with correct form steps."""
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    import httpx
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        http_client=httpx.Client(),
+    )
 
     issues_text = (
         "\n".join(form_issues)
