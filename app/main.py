@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import engine, Base
 import app.db.models
-from app.routers import auth, analyze, athletes, dashboard, notifications, performance_logs, webhooks
+from app.routers import auth, analyze, athletes, dashboard, notifications, performance_logs, webhooks, chat
 from services.scheduler import start_scheduler
 
 logging.basicConfig(
@@ -51,6 +51,7 @@ app.include_router(dashboard.router)
 app.include_router(notifications.router)
 app.include_router(performance_logs.router)
 app.include_router(webhooks.router)
+app.include_router(chat.router)
 
 
 @app.get("/")
