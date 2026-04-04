@@ -39,15 +39,14 @@ async def chat(
             http_client=httpx.Client(),
         )
 
-        # Get user's recent performance for context
         context = _get_user_context(user, db, request.sport)
 
-        system_prompt = f"""You are LevelUp AI, an expert sports performance coach assistant built into the LevelUp app.
+        system_prompt = f"""You are LevelUp AI, an expert sports performance coach assistant.
 
 You specialize in:
 - Sports technique and form correction
-- Training strategies and periodization
-- Sport-specific drills and exercises
+- Training strategies and drills
+- Sport-specific exercises and workouts
 - Mental performance and confidence
 - Injury prevention and recovery
 - Nutrition for athletes
@@ -56,16 +55,16 @@ You specialize in:
 {context}
 
 Guidelines:
-- Give specific, actionable advice
+- Give specific actionable advice
 - Reference the athlete's actual performance data when relevant
 - Be encouraging but honest
 - Keep responses concise — 2-4 short paragraphs max
 - Use bullet points for lists of tips or drills
-- Always relate advice back to improving their score or fixing their form issues
-- If asked about something outside sports/fitness, politely redirect to sports topics"""
+- Always relate advice back to improving their score or fixing form issues
+- If asked about something outside sports, politely redirect"""
 
         messages = [{"role": "system", "content": system_prompt}]
-        for msg in request.messages:
+        for msg in request.messages[-10:]:
             messages.append({"role": msg.role, "content": msg.content})
 
         response = client.chat.completions.create(
@@ -76,16 +75,21 @@ Guidelines:
         )
 
         reply = response.choices[0].message.content.strip()
+        logger.info(f"Chat reply generated for user {user.id}")
 
         return {"reply": reply, "role": "assistant"}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Chat error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Chat failed. Please try again.")
+        logger.error(f"Chat error for user {user.id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chat failed: {str(e)}"
+        )
 
 
 def _get_user_context(user: User, db: Session, sport: Optional[str]) -> str:
-    """Gets user's performance context to personalize chat."""
     try:
         from app.models.performance_log import PerformanceLog
 
@@ -98,26 +102,31 @@ def _get_user_context(user: User, db: Session, sport: Optional[str]) -> str:
         )
 
         if not logs:
-            return f"This athlete is new to LevelUp. Their preferred sport is {sport or 'not set yet'}."
+            return (
+                f"This athlete is new to LevelUp. "
+                f"Their preferred sport is {sport or 'not set yet'}. "
+                f"Encourage them to upload their first video."
+            )
 
         recent = logs[0]
         scores = [l.score for l in logs if l.score]
         avg_score = sum(scores) / len(scores) if scores else 0
+        sports = list(set(l.sport for l in logs if l.sport))
 
         recent_issues = []
         if recent.metrics and isinstance(recent.metrics, dict):
             recent_issues = recent.metrics.get("form_issues", [])
 
-        sports = list(set(l.sport for l in logs if l.sport))
-
         context = f"""Athlete context:
 - Username: {user.username}
 - Sports they train: {', '.join(sports)}
-- Total sessions: {len(logs)}
-- Average score: {avg_score:.0f}/100
+- Total sessions uploaded: {len(logs)}
+- Average performance score: {avg_score:.0f}/100
 - Most recent score: {recent.score}/100 in {recent.sport}
-- Recent form issues: {', '.join(recent_issues) if recent_issues else 'None detected'}
-- Current focus sport: {sport or recent.sport}"""
+- Recent form issues to address: {', '.join(recent_issues) if recent_issues else 'None detected'}
+- Current focus sport: {sport or recent.sport}
+
+Use this context to give personalized advice."""
 
         return context
 
