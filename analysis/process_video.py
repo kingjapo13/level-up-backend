@@ -15,6 +15,27 @@ from sports.registry import get_sport_analyzer
 logger = logging.getLogger(__name__)
 
 SPORT_JOINT_CONFIG = {
+    "swimming": {
+        "joint": "right_shoulder",
+        "proximal": "right_hip",
+        "distal": "right_elbow",
+        "down_threshold": 60,
+        "up_threshold": 160,
+    },
+    "waterpolo": {
+        "joint": "right_elbow",
+        "proximal": "right_shoulder",
+        "distal": "right_wrist",
+        "down_threshold": 60,
+        "up_threshold": 160,
+    },
+    "badminton": {
+        "joint": "right_elbow",
+        "proximal": "right_shoulder",
+        "distal": "right_wrist",
+        "down_threshold": 60,
+        "up_threshold": 160,
+    },
     "squat": {
         "joint": "right_knee",
         "proximal": "right_hip",
