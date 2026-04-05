@@ -61,5 +61,6 @@ def _format_log(log: PerformanceLog, full: bool = False) -> dict:
             "improvement": metrics.get("improvement", ""),
             "training_plan": metrics.get("training_plan", None),
             "annotated_frames": metrics.get("annotated_frames", []),
+            "technique_guide": metrics.get("technique_guide", None),
         })
     return result
