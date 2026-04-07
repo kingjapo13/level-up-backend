@@ -10,7 +10,7 @@ import app.db.models
 from app.routers import (
     auth, analyze, athletes, dashboard,
     notifications, performance_logs,
-    webhooks, chat, comparison
+    webhooks, chat, comparison, leaderboard
 )
 from services.scheduler import start_scheduler
 
@@ -57,7 +57,7 @@ app.include_router(performance_logs.router)
 app.include_router(webhooks.router)
 app.include_router(chat.router)
 app.include_router(comparison.router)
-
+app.include_router(leaderboard.router)
 
 @app.get("/")
 def root():

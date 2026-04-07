@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import relationship
+from datetime import datetime
 from app.db.database import Base
 
 
@@ -11,10 +12,10 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     device_token = Column(String, nullable=True)
-    personality_mode = Column(String, default="supportive")
+    personality_mode = Column(String, default="supportive", nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
     subscription = relationship("Subscription", back_populates="user", uselist=False)
-    athletes = relationship("Athlete", back_populates="owner")
     performance_logs = relationship("PerformanceLog", back_populates="user")
-    sessions = relationship("Session", back_populates="user")
-    athlete_profile = relationship("AthleteProfile", back_populates="user", uselist=False)
+    age = Column(Integer, nullable=True)
+location = Column(String, nullable=True)
