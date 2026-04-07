@@ -1,44 +1,100 @@
 import logging
-import os
+import httpx
 
 logger = logging.getLogger(__name__)
 
-_firebase_initialized = False
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 
-def _init_firebase():
-    global _firebase_initialized
-    if _firebase_initialized:
-        return
-    try:
-        import firebase_admin
-        from firebase_admin import credentials
-        key_path = os.getenv("FIREBASE_KEY_PATH", "firebase_key.json")
-        if not os.path.exists(key_path):
-            logger.warning(f"Firebase key not found at {key_path} — push notifications disabled.")
-            return
-        cred = credentials.Certificate(key_path)
-        firebase_admin.initialize_app(cred)
-        _firebase_initialized = True
-        logger.info("Firebase initialized.")
-    except Exception as e:
-        logger.warning(f"Firebase init failed: {e}")
-
-
-def send_push_notification(token: str, title: str, body: str) -> bool:
-    _init_firebase()
-    if not _firebase_initialized:
-        logger.warning("Push notification skipped — Firebase not initialized.")
+def send_push_notification(
+    token: str,
+    title: str,
+    body: str,
+    data: dict = None,
+):
+    """Send a push notification via Expo Push Service."""
+    if not token or not token.startswith("ExponentPushToken"):
+        logger.warning(f"Invalid push token: {token}")
         return False
+
+    payload = {
+        "to": token,
+        "title": title,
+        "body": body,
+        "sound": "default",
+        "priority": "high",
+        "data": data or {},
+    }
+
     try:
-        from firebase_admin import messaging
-        message = messaging.Message(
-            notification=messaging.Notification(title=title, body=body),
-            token=token,
-        )
-        response = messaging.send(message)
-        logger.info(f"Push sent: {response}")
-        return True
+        with httpx.Client(timeout=10) as client:
+            response = client.post(
+                EXPO_PUSH_URL,
+                json=payload,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip, deflate",
+                    "Content-Type": "application/json",
+                },
+            )
+            result = response.json()
+            if result.get("data", {}).get("status") == "ok":
+                logger.info(f"Push sent successfully to {token[:30]}...")
+                return True
+            else:
+                logger.warning(f"Push send failed: {result}")
+                return False
     except Exception as e:
-        logger.warning(f"Push notification failed: {e}")
+        logger.error(f"Push notification error: {e}")
         return False
+
+
+def send_analysis_complete_notification(token: str, sport: str, score: int):
+    """Notify user their analysis is ready."""
+    sport_emoji = {
+        "basketball": "🏀", "soccer": "⚽", "tennis": "🎾",
+        "golf": "⛳", "baseball": "⚾", "volleyball": "🏐",
+        "swimming": "🏊", "waterpolo": "🤽", "pickleball": "🏓",
+        "badminton": "🏸", "boxing": "🥊",
+    }.get(sport, "🏅")
+
+    score_label = (
+        "Elite performance! 🔥" if score >= 85 else
+        "Great session! 💪" if score >= 70 else
+        "Keep improving! 📈"
+    )
+
+    return send_push_notification(
+        token=token,
+        title=f"{sport_emoji} Analysis Complete!",
+        body=f"Your {sport.title()} score: {score}/100 — {score_label}",
+        data={"type": "analysis_complete", "sport": sport, "score": score},
+    )
+
+
+def send_training_reminder_notification(token: str, sport: str):
+    """Send daily training reminder."""
+    sport_emoji = {
+        "basketball": "🏀", "soccer": "⚽", "tennis": "🎾",
+        "golf": "⛳", "baseball": "⚾", "volleyball": "🏐",
+        "swimming": "🏊", "waterpolo": "🤽", "pickleball": "🏓",
+        "badminton": "🏸", "boxing": "🥊",
+    }.get(sport, "🏅")
+
+    return send_push_notification(
+        token=token,
+        title=f"{sport_emoji} Time to train!",
+        body=f"Upload a {sport.title()} video today to keep your streak going 🔥",
+        data={"type": "training_reminder", "sport": sport},
+    )
+
+
+def send_weekly_report_notification(token: str, avg_score: float, improvement: float):
+    """Send weekly progress report notification."""
+    trend = "📈 Up" if improvement > 0 else "📉 Down"
+    return send_push_notification(
+        token=token,
+        title="📊 Your Weekly Report is Ready",
+        body=f"Avg score: {avg_score:.0f}/100 • {trend} {abs(improvement):.1f}% this week",
+        data={"type": "weekly_report"},
+    )
