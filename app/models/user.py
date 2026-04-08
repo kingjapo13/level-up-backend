@@ -13,9 +13,18 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     device_token = Column(String, nullable=True)
     personality_mode = Column(String, default="supportive", nullable=True)
+    age = Column(Integer, nullable=True)
+    location = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    subscription = relationship("Subscription", back_populates="user", uselist=False)
-    performance_logs = relationship("PerformanceLog", back_populates="user")
-    age = Column(Integer, nullable=True)
-location = Column(String, nullable=True)
+    subscription = relationship(
+        "Subscription",
+        back_populates="user",
+        uselist=False,
+        lazy="select",
+    )
+    performance_logs = relationship(
+        "PerformanceLog",
+        back_populates="user",
+        lazy="select",
+    )
