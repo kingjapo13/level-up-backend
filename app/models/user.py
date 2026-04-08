@@ -30,7 +30,13 @@ class User(Base):
     )
     athletes = relationship(
         "Athlete",
+        back_populates="user",
         uselist=False,
         lazy="select",
-        foreign_keys="Athlete.user_id",
+    )
+    athlete_profile = relationship(
+        "AthleteProfile",
+        back_populates="user",
+        uselist=False,
+        lazy="select",
     )

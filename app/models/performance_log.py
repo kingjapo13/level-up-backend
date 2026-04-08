@@ -19,4 +19,4 @@ class PerformanceLog(Base):
     user = relationship("User", back_populates="performance_logs")
 
     athlete_id = Column(Integer, ForeignKey("athletes.id"), nullable=True)
-    athlete = relationship("Athlete", back_populates="performance_logs")
+athlete = relationship("Athlete", back_populates="performance_logs")

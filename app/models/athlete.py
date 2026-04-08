@@ -20,5 +20,14 @@ class Athlete(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationship back to user — no back_populates to avoid circular issues
-    user = relationship("User", foreign_keys=[user_id])
+    user = relationship("User", back_populates="athletes")
+    performance_logs = relationship(
+        "PerformanceLog",
+        back_populates="athlete",
+        lazy="select",
+    )
+    sessions = relationship(
+        "Session",
+        back_populates="athlete",
+        lazy="select",
+    )
