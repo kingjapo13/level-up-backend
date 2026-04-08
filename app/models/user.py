@@ -28,3 +28,9 @@ class User(Base):
         back_populates="user",
         lazy="select",
     )
+    athletes = relationship(
+        "Athlete",
+        back_populates="user",
+        uselist=False,
+        lazy="select",
+    )
