@@ -10,7 +10,7 @@ class PerformanceLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     athlete_id = Column(Integer, ForeignKey("athletes.id"), nullable=True)
-    sport = Column(String, nullable=True)
+    sport = Column(String, nullable=False)
     score = Column(Float, nullable=True)
     reps = Column(Integer, nullable=True)
     video_path = Column(String, nullable=True)
