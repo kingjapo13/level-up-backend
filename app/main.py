@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.db.database import engine, Base
 import app.db.models
@@ -23,35 +24,75 @@ logger = logging.getLogger(__name__)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables created/verified.")
+def run_migrations():
+    """Run all database column migrations safely."""
+    migrations = [
+        # Users table
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_token VARCHAR",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS personality_mode VARCHAR DEFAULT 'supportive'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
 
-    # Run column migrations for new columns
+        # Performance logs table
+        "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS athlete_id INTEGER",
+        "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
+
+        # Athletes table
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS age INTEGER",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS location VARCHAR",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS bio VARCHAR",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS looking_for VARCHAR",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS skill_level VARCHAR",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS best_score FLOAT",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS total_sessions INTEGER DEFAULT 0",
+        "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
+
+        # Athlete profiles table — create if not exists handled by create_all
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS display_name VARCHAR",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS secondary_sports VARCHAR",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS avg_score FLOAT",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS best_score FLOAT",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS total_sessions INTEGER DEFAULT 0",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS bio VARCHAR",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS looking_for VARCHAR",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS is_visible BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
+    ]
+
     try:
-        from sqlalchemy import text
         with engine.connect() as conn:
-            migrations = [
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_token VARCHAR",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS personality_mode VARCHAR DEFAULT 'supportive'",
-            ]
             for sql in migrations:
                 try:
                     conn.execute(text(sql))
                     conn.commit()
-                    logger.info(f"Migration OK: {sql[:50]}")
+                    logger.info(f"Migration OK: {sql[:70]}")
                 except Exception as e:
-                    logger.warning(f"Migration skipped: {e}")
+                    logger.warning(f"Migration skipped ({sql[:40]}): {str(e)[:60]}")
+        logger.info("All migrations complete.")
     except Exception as e:
-        logger.warning(f"Migration block failed: {e}")
+        logger.error(f"Migration block failed: {e}")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create all tables first
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created/verified.")
+
+    # Then run column migrations
+    run_migrations()
+
+    # Start scheduler
     scheduler = start_scheduler()
+    logger.info("Scheduler started.")
+
     yield
+
+    # Shutdown
     scheduler.shutdown()
     logger.info("Scheduler stopped.")
+
 
 app = FastAPI(
     title="LevelUp AI Coaching API",
@@ -78,6 +119,7 @@ app.include_router(webhooks.router)
 app.include_router(chat.router)
 app.include_router(comparison.router)
 app.include_router(leaderboard.router)
+
 
 @app.get("/")
 def root():
