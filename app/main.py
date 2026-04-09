@@ -27,11 +27,31 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created/verified.")
+
+    # Run column migrations for new columns
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            migrations = [
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_token VARCHAR",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS personality_mode VARCHAR DEFAULT 'supportive'",
+            ]
+            for sql in migrations:
+                try:
+                    conn.execute(text(sql))
+                    conn.commit()
+                    logger.info(f"Migration OK: {sql[:50]}")
+                except Exception as e:
+                    logger.warning(f"Migration skipped: {e}")
+    except Exception as e:
+        logger.warning(f"Migration block failed: {e}")
+
     scheduler = start_scheduler()
     yield
     scheduler.shutdown()
     logger.info("Scheduler stopped.")
-
 
 app = FastAPI(
     title="LevelUp AI Coaching API",
