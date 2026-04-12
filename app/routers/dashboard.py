@@ -37,7 +37,10 @@ def get_personal_bests(logs):
     bests = {}
     try:
         for log in logs:
-            if log.sport and (log.sport not in bests or (log.score or 0) > bests[log.sport]):
+            if log.sport and (
+                log.sport not in bests or
+                (log.score or 0) > bests[log.sport]
+            ):
                 bests[log.sport] = log.score or 0
     except Exception:
         pass
@@ -49,9 +52,15 @@ def get_weekly_challenge(logs):
         now = datetime.utcnow()
         week_start = now - timedelta(days=now.weekday())
         week_start = week_start.replace(hour=0, minute=0, second=0)
-        weekly_logs = [l for l in logs if l.created_at and l.created_at >= week_start]
+        weekly_logs = [
+            l for l in logs
+            if l.created_at and l.created_at >= week_start
+        ]
         target_score = 80
-        best_this_week = max((l.score or 0) for l in weekly_logs) if weekly_logs else 0
+        best_this_week = (
+            max((l.score or 0) for l in weekly_logs)
+            if weekly_logs else 0
+        )
         completed = best_this_week >= target_score
         return {
             "title": f"Score {target_score}+ this week",
@@ -114,6 +123,21 @@ def safe_average(scores):
         return None
 
 
+def get_trial_urgency(is_trial, trial_expired, trial_days):
+    """Returns urgency level based on days remaining in trial."""
+    if not is_trial or trial_expired:
+        return None
+    if trial_days is None:
+        return None
+    if trial_days <= 1:
+        return "critical"
+    if trial_days <= 2:
+        return "high"
+    if trial_days <= 5:
+        return "medium"
+    return None
+
+
 @router.get("/")
 def get_dashboard(
     db: Session = Depends(get_db),
@@ -152,15 +176,24 @@ def get_dashboard(
 
         is_trial = False
         trial_expired = False
-        trial_days = 0
+        trial_days = None
 
         try:
             if user.subscription:
                 is_trial = getattr(user.subscription, 'is_trial', False)
                 trial_expired = getattr(user.subscription, 'trial_expired', False)
-                trial_days = getattr(user.subscription, 'trial_days_remaining', 0)
+                trial_days = getattr(user.subscription, 'trial_days_remaining', None)
         except Exception as e:
             logger.warning(f"Subscription access error: {e}")
+
+        trial_urgency = get_trial_urgency(is_trial, trial_expired, trial_days)
+
+        # Best score across all sports for banner
+        best_overall = None
+        if personal_bests:
+            vals = [v for v in personal_bests.values() if v]
+            if vals:
+                best_overall = round(max(vals))
 
         return {
             "username": user.username,
@@ -168,6 +201,8 @@ def get_dashboard(
             "is_trial": is_trial,
             "trial_expired": trial_expired,
             "trial_days_remaining": trial_days,
+            "trial_urgency": trial_urgency,
+            "best_overall_score": best_overall,
             "total_sessions": len(logs),
             "average_score": safe_average(scores),
             "streak": streak,
@@ -185,6 +220,8 @@ def get_dashboard(
             "is_trial": False,
             "trial_expired": False,
             "trial_days_remaining": None,
+            "trial_urgency": None,
+            "best_overall_score": None,
             "streak": 0,
             "total_sessions": 0,
             "average_score": None,
@@ -221,7 +258,10 @@ def weekly_report(
         raise
     except Exception as e:
         logger.error(f"Weekly report error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not generate weekly report")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not generate weekly report"
+        )
 
 
 @router.get("/training-plan")
@@ -244,4 +284,7 @@ def training_plan(
         raise
     except Exception as e:
         logger.error(f"Training plan error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not generate training plan")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not generate training plan"
+        )
