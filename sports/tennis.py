@@ -5,106 +5,139 @@ from sports.base import SportAnalyzer
 class TennisAnalyzer(SportAnalyzer):
     name = "tennis"
 
-    def analyze(self, angle_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyzes tennis serve/stroke using shoulder, elbow, and knee angles.
+    IDEAL_ELBOW_MIN = 100
+    IDEAL_ELBOW_MAX = 145
+    IDEAL_SHOULDER_MIN = 45
+    IDEAL_SHOULDER_MAX = 90
+    IDEAL_HIP_MIN = 50
+    IDEAL_HIP_MAX = 85
 
-        Expected angle_data keys:
-            - shoulder: List[float]
-            - elbow: List[float]
-            - knee: List[float]
-        """
-        shoulder_angles = angle_data.get("shoulder", [])
+    def analyze(self, angle_data: Dict[str, Any]) -> Dict[str, Any]:
         elbow_angles = angle_data.get("elbow", [])
+        shoulder_angles = angle_data.get("shoulder", [])
+        hip_angles = angle_data.get("hip", [])
         knee_angles = angle_data.get("knee", [])
 
-        if not shoulder_angles and not elbow_angles:
-            return {"error": "Insufficient angle data for tennis analysis"}
+        if not elbow_angles and not shoulder_angles:
+            return {"error": "No arm angle data — ensure full upper body is visible"}
 
-        # Serve power proxy: shoulder rotation range
-        serve_power = None
-        if shoulder_angles:
-            shoulder_range = max(shoulder_angles) - min(shoulder_angles)
-            serve_power = min(100, int(shoulder_range * 1.3))
+        avg_elbow = self._safe_avg(elbow_angles) if elbow_angles else None
+        avg_shoulder = self._safe_avg(shoulder_angles) if shoulder_angles else None
+        avg_hip = self._safe_avg(hip_angles) if hip_angles else None
+        avg_knee = self._safe_avg(knee_angles) if knee_angles else None
 
-        # Knee bend for ready position
-        avg_knee = sum(knee_angles) / len(knee_angles) if knee_angles else None
+        elbow_consistency = self._consistency_pct(
+            elbow_angles, self.IDEAL_ELBOW_MIN, self.IDEAL_ELBOW_MAX
+        ) if elbow_angles else 0
 
-        # Elbow extension for follow through
-        avg_elbow = sum(elbow_angles) / len(elbow_angles) if elbow_angles else None
-        max_elbow = max(elbow_angles) if elbow_angles else None
-
-        # Consistency of shoulder rotation
-        consistency = None
-        if shoulder_angles:
-            ideal_frames = [a for a in shoulder_angles if 60 <= a <= 120]
-            consistency = round(len(ideal_frames) / len(shoulder_angles) * 100, 1)
+        elbow_range = (max(elbow_angles) - min(elbow_angles)) if elbow_angles and len(elbow_angles) > 1 else 0
 
         return {
-            "serve_power": serve_power or 70,
-            "avg_knee_angle": round(avg_knee, 1) if avg_knee else None,
             "avg_elbow_angle": round(avg_elbow, 1) if avg_elbow else None,
-            "max_elbow_extension": round(max_elbow, 1) if max_elbow else None,
-            "stroke_consistency": consistency or 70,
+            "avg_shoulder_angle": round(avg_shoulder, 1) if avg_shoulder else None,
+            "avg_hip_angle": round(avg_hip, 1) if avg_hip else None,
+            "avg_knee_angle": round(avg_knee, 1) if avg_knee else None,
+            "elbow_consistency_pct": elbow_consistency,
+            "elbow_range": round(elbow_range, 1),
         }
 
     def score(self, metrics: Dict[str, Any]) -> int:
         if "error" in metrics:
-            return 0
+            return 30
 
-        score = 60
-        serve_power = metrics.get("serve_power", 0)
-        consistency = metrics.get("stroke_consistency", 0)
+        elbow = metrics.get("avg_elbow_angle")
+        shoulder = metrics.get("avg_shoulder_angle")
+        hip = metrics.get("avg_hip_angle")
+        knee = metrics.get("avg_knee_angle")
+        consistency = metrics.get("elbow_consistency_pct", 0)
+        elbow_range = metrics.get("elbow_range", 0)
 
-        if serve_power >= 80:
-            score += 20
-        elif serve_power >= 60:
-            score += 10
+        # Factor 1: Elbow position at contact (25%)
+        if elbow and self.IDEAL_ELBOW_MIN <= elbow <= self.IDEAL_ELBOW_MAX:
+            elbow_score = 88
+        elif elbow and 80 <= elbow < self.IDEAL_ELBOW_MIN:
+            elbow_score = 65
+        elif elbow and self.IDEAL_ELBOW_MAX < elbow <= 165:
+            elbow_score = 60
+        elif elbow:
+            elbow_score = 35
         else:
-            score -= 10
+            elbow_score = 50
 
-        if consistency >= 70:
-            score += 20
-        elif consistency >= 50:
-            score += 10
+        # Factor 2: Shoulder rotation (25%)
+        if shoulder and self.IDEAL_SHOULDER_MIN <= shoulder <= self.IDEAL_SHOULDER_MAX:
+            shoulder_score = 88
+        elif shoulder and 30 <= shoulder < self.IDEAL_SHOULDER_MIN:
+            shoulder_score = 60
+        elif shoulder:
+            shoulder_score = 45
         else:
-            score -= 10
+            shoulder_score = 50
 
-        return max(0, min(100, score))
+        # Factor 3: Hip rotation (20%)
+        if hip and self.IDEAL_HIP_MIN <= hip <= self.IDEAL_HIP_MAX:
+            hip_score = 85
+        elif hip and 35 <= hip < self.IDEAL_HIP_MIN:
+            hip_score = 60
+        elif hip:
+            hip_score = 40
+        else:
+            hip_score = 50
+
+        # Factor 4: Swing arc range of motion (15%)
+        if elbow_range >= 50:
+            arc_score = 88
+        elif elbow_range >= 30:
+            arc_score = 68
+        elif elbow_range >= 15:
+            arc_score = 48
+        else:
+            arc_score = 30
+
+        # Factor 5: Knee bend / ready position (15%)
+        if knee and 130 <= knee <= 165:
+            knee_score = 85
+        elif knee and 115 <= knee < 130:
+            knee_score = 65
+        elif knee:
+            knee_score = 45
+        else:
+            knee_score = 50
+
+        return self._score_from_factors([
+            {"score": elbow_score,    "weight": 0.25},
+            {"score": shoulder_score, "weight": 0.25},
+            {"score": hip_score,      "weight": 0.20},
+            {"score": arc_score,      "weight": 0.15},
+            {"score": knee_score,     "weight": 0.15},
+        ])
 
     def feedback(self, metrics: Dict[str, Any]) -> List[str]:
-        tips = []
         if "error" in metrics:
-            return ["Could not analyze tennis motion. Ensure full body is visible."]
+            return [{"tip": "Could not detect tennis stroke. Ensure full body is visible from the side.", "priority": "high"}]
 
-        serve_power = metrics.get("serve_power", 100)
-        consistency = metrics.get("stroke_consistency", 100)
-        avg_knee = metrics.get("avg_knee_angle")
-        max_elbow = metrics.get("max_elbow_extension")
+        tips = []
+        elbow = metrics.get("avg_elbow_angle")
+        shoulder = metrics.get("avg_shoulder_angle")
+        hip = metrics.get("avg_hip_angle")
+        elbow_range = metrics.get("elbow_range", 0)
 
-        if serve_power < 65:
-            tips.append(
-                "Low serve power detected — rotate your shoulder fully and drive through the ball."
-            )
+        if elbow is not None:
+            if elbow < 85:
+                tips.append({"tip": f"Arm too bent at contact ({elbow:.0f}°) — extend toward the ball for more power and control.", "priority": "high"})
+            elif elbow > 160:
+                tips.append({"tip": f"Arm too straight ({elbow:.0f}°) — keep a slight bend to absorb pace and generate topspin.", "priority": "medium"})
 
-        if consistency < 60:
-            tips.append(
-                f"Stroke consistency is low ({consistency:.0f}%) — focus on a repeatable swing path."
-            )
+        if shoulder is not None and shoulder < 35:
+            tips.append({"tip": f"Limited shoulder rotation ({shoulder:.0f}°) — turn your shoulders fully on the takeback for more power.", "priority": "high"})
 
-        if avg_knee and avg_knee > 160:
-            tips.append(
-                "Bend your knees more in your ready position for better court coverage and reaction time."
-            )
+        if hip is not None and hip < 40:
+            tips.append({"tip": f"Hips not rotating through the shot ({hip:.0f}°) — drive your hips toward the target at contact.", "priority": "high"})
 
-        if max_elbow and max_elbow < 150:
-            tips.append(
-                "Extend your arm more fully on follow-through for better power and control."
-            )
+        if elbow_range < 20:
+            tips.append({"tip": "Very short swing arc detected — take a fuller backswing to generate pace.", "priority": "medium"})
 
         if not tips:
-            tips.append(
-                "Solid tennis mechanics! Focus on placement, spin variation, and footwork to the ball."
-            )
+            tips.append({"tip": "Good stroke mechanics! Focus on consistent contact point and finishing high over your shoulder.", "priority": "low"})
 
         return tips
