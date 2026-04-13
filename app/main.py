@@ -11,7 +11,7 @@ import app.db.models
 from app.routers import (
     auth, analyze, athletes, dashboard,
     notifications, performance_logs,
-    webhooks, chat, comparison, leaderboard
+    webhooks, chat, comparison, leaderboard, recruiting
 )
 from services.scheduler import start_scheduler
 
@@ -33,6 +33,8 @@ def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_token VARCHAR",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS personality_mode VARCHAR DEFAULT 'supportive'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR DEFAULT 'athlete'",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code VARCHAR",
 
         # Performance logs table
         "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS athlete_id INTEGER",
@@ -48,7 +50,7 @@ def run_migrations():
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS total_sessions INTEGER DEFAULT 0",
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
 
-        # Athlete profiles table — create if not exists handled by create_all
+        # Athlete profiles table
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS display_name VARCHAR",
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS secondary_sports VARCHAR",
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS avg_score FLOAT",
@@ -76,20 +78,12 @@ def run_migrations():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all tables first
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created/verified.")
-
-    # Then run column migrations
     run_migrations()
-
-    # Start scheduler
     scheduler = start_scheduler()
     logger.info("Scheduler started.")
-
     yield
-
-    # Shutdown
     scheduler.shutdown()
     logger.info("Scheduler stopped.")
 
@@ -97,7 +91,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LevelUp AI Coaching API",
     version="1.0.0",
-    description="AI-powered sports coaching — analyze video, get feedback, track progress.",
+    description="AI-powered sports coaching.",
     lifespan=lifespan,
 )
 
@@ -119,6 +113,7 @@ app.include_router(webhooks.router)
 app.include_router(chat.router)
 app.include_router(comparison.router)
 app.include_router(leaderboard.router)
+app.include_router(recruiting.router)
 
 
 @app.get("/")
