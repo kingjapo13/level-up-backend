@@ -236,5 +236,62 @@ async def analyze_video(
             )
     except Exception as e:
         logger.warning(f"Push notification failed: {e}")
+# 11. Award XP
+    try:
+        from services.xp_service import award_xp
+        from app.models.performance_log import PerformanceLog as PL
+        from sqlalchemy import func
 
+        total_sessions_count = db.query(func.count(PL.id)).filter(
+            PL.user_id == user.id
+        ).scalar() or 0
+
+        is_pb = False
+        if previous_score and result.get("score"):
+            is_pb = result["score"] > previous_score
+
+        improvement = 0
+        if previous_score and result.get("score"):
+            improvement = result["score"] - previous_score
+
+        from datetime import datetime, timedelta
+        logs_for_streak = db.query(PL).filter(
+            PL.user_id == user.id
+        ).order_by(PL.created_at.desc()).limit(30).all()
+
+        streak = 0
+        today = datetime.utcnow().date()
+        dates = sorted(set(
+            l.created_at.date() for l in logs_for_streak if l.created_at
+        ), reverse=True)
+        for i, date in enumerate(dates):
+            expected = today - timedelta(days=i)
+            if date == expected:
+                streak += 1
+            else:
+                break
+
+        xp_result = award_xp(
+            user_id=user.id,
+            db=db,
+            score=result.get("score", 0),
+            form_issues=result.get("form_issues", []),
+            is_personal_best=is_pb,
+            streak=streak,
+            total_sessions=total_sessions_count,
+            improvement=improvement,
+        )
+
+        result["xp_earned"] = xp_result["xp_earned"]
+        result["xp_breakdown"] = xp_result["xp_breakdown"]
+        result["total_xp"] = xp_result["total_xp"]
+        result["level"] = xp_result["level"]
+        result["level_name"] = xp_result["level_name"]
+        result["leveled_up"] = xp_result["leveled_up"]
+        result["new_badges"] = xp_result["new_badges"]
+        result["xp_progress_pct"] = xp_result["progress_pct"]
+
+        logger.info(f"XP awarded: +{xp_result['xp_earned']} XP to user {user.id}")
+    except Exception as e:
+        logger.warning(f"XP award failed: {e}")
     return result

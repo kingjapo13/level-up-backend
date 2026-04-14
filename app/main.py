@@ -11,7 +11,8 @@ import app.db.models
 from app.routers import (
     auth, analyze, athletes, dashboard,
     notifications, performance_logs,
-    webhooks, chat, comparison, leaderboard, recruiting
+    webhooks, chat, comparison, leaderboard,
+    recruiting, gamification
 )
 from services.scheduler import start_scheduler
 
@@ -27,7 +28,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 def run_migrations():
     """Run all database column migrations safely."""
     migrations = [
-        # Users table
+        # ── Users ──────────────────────────────────────────────────────────
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS device_token VARCHAR",
@@ -36,11 +37,13 @@ def run_migrations():
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR DEFAULT 'athlete'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code VARCHAR",
 
-        # Performance logs table
+        # ── Performance logs ───────────────────────────────────────────────
         "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS athlete_id INTEGER",
         "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
+        "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS metrics JSONB",
+        "ALTER TABLE performance_logs ADD COLUMN IF NOT EXISTS reps INTEGER",
 
-        # Athletes table
+        # ── Athletes ───────────────────────────────────────────────────────
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS age INTEGER",
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS location VARCHAR",
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS bio VARCHAR",
@@ -50,7 +53,7 @@ def run_migrations():
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS total_sessions INTEGER DEFAULT 0",
         "ALTER TABLE athletes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
 
-        # Athlete profiles table
+        # ── Athlete profiles ───────────────────────────────────────────────
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS display_name VARCHAR",
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS secondary_sports VARCHAR",
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS avg_score FLOAT",
@@ -60,6 +63,32 @@ def run_migrations():
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS looking_for VARCHAR",
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS is_visible BOOLEAN DEFAULT TRUE",
         "ALTER TABLE athlete_profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
+
+        # ── Gamification ───────────────────────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS user_game_profiles (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) UNIQUE NOT NULL,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            badges JSONB DEFAULT '[]',
+            total_xp_earned INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+        """,
+
+        # ── Athlete links (coach system) ───────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS athlete_links (
+            id SERIAL PRIMARY KEY,
+            coach_id INTEGER REFERENCES users(id) NOT NULL,
+            athlete_id INTEGER REFERENCES users(id) NOT NULL,
+            athlete_name VARCHAR,
+            status VARCHAR DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        """,
     ]
 
     try:
@@ -68,9 +97,11 @@ def run_migrations():
                 try:
                     conn.execute(text(sql))
                     conn.commit()
-                    logger.info(f"Migration OK: {sql[:70]}")
+                    preview = sql.strip()[:70].replace('\n', ' ')
+                    logger.info(f"Migration OK: {preview}")
                 except Exception as e:
-                    logger.warning(f"Migration skipped ({sql[:40]}): {str(e)[:60]}")
+                    preview = sql.strip()[:40].replace('\n', ' ')
+                    logger.warning(f"Migration skipped ({preview}): {str(e)[:80]}")
         logger.info("All migrations complete.")
     except Exception as e:
         logger.error(f"Migration block failed: {e}")
@@ -114,6 +145,7 @@ app.include_router(chat.router)
 app.include_router(comparison.router)
 app.include_router(leaderboard.router)
 app.include_router(recruiting.router)
+app.include_router(gamification.router)
 
 
 @app.get("/")
