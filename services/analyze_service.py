@@ -2,7 +2,9 @@ import os
 import uuid
 import shutil
 import logging
+from datetime import datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.performance_log import PerformanceLog
@@ -32,7 +34,6 @@ def has_feature(user: User, feature: str) -> bool:
 def enforce_upload_limit(user: User, db: Session):
     """Raises an exception if user has exceeded their upload limit."""
     from fastapi import HTTPException
-    from datetime import datetime
 
     if not user.subscription:
         raise HTTPException(
@@ -62,7 +63,6 @@ def enforce_upload_limit(user: User, db: Session):
             detail="Please upgrade to Pro or Elite to upload videos."
         )
 
-    # Count uploads this month
     now = datetime.utcnow()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -79,6 +79,31 @@ def enforce_upload_limit(user: User, db: Session):
                 f"Upgrade to Elite for 100 uploads per month."
             )
         )
+
+
+def calculate_streak(user_id: int, db: Session) -> int:
+    """Calculate current training streak for a user."""
+    try:
+        logs = db.query(PerformanceLog).filter(
+            PerformanceLog.user_id == user_id
+        ).order_by(PerformanceLog.created_at.desc()).limit(30).all()
+
+        streak = 0
+        today = datetime.utcnow().date()
+        dates = sorted(set(
+            l.created_at.date() for l in logs if l.created_at
+        ), reverse=True)
+
+        for i, date in enumerate(dates):
+            expected = today - timedelta(days=i)
+            if date == expected:
+                streak += 1
+            else:
+                break
+        return streak
+    except Exception as e:
+        logger.warning(f"Streak calculation failed: {e}")
+        return 0
 
 
 async def analyze_video(
@@ -200,7 +225,7 @@ async def analyze_video(
         except Exception as e:
             logger.warning(f"Technique guide failed: {e}")
 
-    # 9. Save performance log with full metrics
+    # 9. Save performance log
     try:
         log = PerformanceLog(
             user_id=user.id,
@@ -209,21 +234,21 @@ async def analyze_video(
             reps=result.get("reps_completed"),
             video_path=converted_filename,
             metrics={
-                "form_issues":     result.get("form_issues", []),
-                "coaching_tips":   result.get("coaching_tips", []),
-                "summary":         result.get("summary", ""),
-                "gpt_feedback":    result.get("gpt_feedback", ""),
-                "improvement":     result.get("improvement", ""),
-                "training_plan":   result.get("training_plan", None),
+                "form_issues":      result.get("form_issues", []),
+                "coaching_tips":    result.get("coaching_tips", []),
+                "summary":          result.get("summary", ""),
+                "gpt_feedback":     result.get("gpt_feedback", ""),
+                "improvement":      result.get("improvement", ""),
+                "training_plan":    result.get("training_plan", None),
                 "annotated_frames": result.get("annotated_frames", []),
-                "technique_guide": result.get("technique_guide", None),
+                "technique_guide":  result.get("technique_guide", None),
             },
         )
         db.add(log)
         db.commit()
         logger.info(f"Performance log saved for user {user.id}")
     except Exception as e:
-        logger.error(f"Failed to save performance log: {e}")
+        logger.error(f"Failed to save performance log: {e}", exc_info=True)
 
     # 10. Push notification
     try:
@@ -236,40 +261,18 @@ async def analyze_video(
             )
     except Exception as e:
         logger.warning(f"Push notification failed: {e}")
-# 11. Award XP
+
+    # 11. Award XP
     try:
         from services.xp_service import award_xp
-        from app.models.performance_log import PerformanceLog as PL
-        from sqlalchemy import func
 
-        total_sessions_count = db.query(func.count(PL.id)).filter(
-            PL.user_id == user.id
+        total_sessions_count = db.query(func.count(PerformanceLog.id)).filter(
+            PerformanceLog.user_id == user.id
         ).scalar() or 0
 
-        is_pb = False
-        if previous_score and result.get("score"):
-            is_pb = result["score"] > previous_score
-
-        improvement = 0
-        if previous_score and result.get("score"):
-            improvement = result["score"] - previous_score
-
-        from datetime import datetime, timedelta
-        logs_for_streak = db.query(PL).filter(
-            PL.user_id == user.id
-        ).order_by(PL.created_at.desc()).limit(30).all()
-
-        streak = 0
-        today = datetime.utcnow().date()
-        dates = sorted(set(
-            l.created_at.date() for l in logs_for_streak if l.created_at
-        ), reverse=True)
-        for i, date in enumerate(dates):
-            expected = today - timedelta(days=i)
-            if date == expected:
-                streak += 1
-            else:
-                break
+        is_pb = bool(previous_score and result.get("score") and result["score"] > previous_score)
+        improvement = float(result.get("score", 0) - (previous_score or 0))
+        streak = calculate_streak(user.id, db)
 
         xp_result = award_xp(
             user_id=user.id,
@@ -293,5 +296,6 @@ async def analyze_video(
 
         logger.info(f"XP awarded: +{xp_result['xp_earned']} XP to user {user.id}")
     except Exception as e:
-        logger.warning(f"XP award failed: {e}")
+        logger.warning(f"XP award failed: {e}", exc_info=True)
+
     return result
