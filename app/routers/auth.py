@@ -63,21 +63,18 @@ def create_access_token(data: dict) -> str:
 def register(request: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new user with a 7-day free trial."""
     try:
-        # Check existing username
         if db.query(User).filter(User.username == request.username).first():
             raise HTTPException(
                 status_code=400,
                 detail="Username already taken. Please choose a different one."
             )
 
-        # Check existing email
         if db.query(User).filter(User.email == request.email).first():
             raise HTTPException(
                 status_code=400,
                 detail="An account with this email already exists."
             )
 
-        # Create user
         user = User(
             username=request.username,
             email=request.email,
@@ -86,7 +83,6 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
         db.add(user)
         db.flush()
 
-        # Create 7-day trial subscription
         if Subscription:
             trial_end = datetime.utcnow() + timedelta(days=7)
             subscription = Subscription(
@@ -110,10 +106,7 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Registration error: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Registration failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 
 @router.post("/token")
@@ -123,9 +116,7 @@ def login(
 ):
     """Login and return access token."""
     try:
-        user = db.query(User).filter(
-            User.username == form_data.username
-        ).first()
+        user = db.query(User).filter(User.username == form_data.username).first()
 
         if not user or not verify_password(form_data.password, user.hashed_password):
             raise HTTPException(
@@ -147,10 +138,7 @@ def login(
         raise
     except Exception as e:
         logger.error(f"Login error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Login failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
 
 
 @router.get("/me")
@@ -163,6 +151,7 @@ def get_me(
         subscription = user.subscription
         tier = subscription.effective_tier if subscription else "free"
         trial_days = None
+        invite_code = getattr(user, 'invite_code', None)
 
         if subscription and subscription.tier == "trial" and subscription.trial_end:
             days = (subscription.trial_end - datetime.utcnow()).days
@@ -179,14 +168,12 @@ def get_me(
             "device_token": getattr(user, 'device_token', None),
             "age": getattr(user, 'age', None),
             "location": getattr(user, 'location', None),
+            "invite_code": invite_code,
         }
 
     except Exception as e:
         logger.error(f"Get me error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not fetch user profile: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Could not fetch user profile: {str(e)}")
 
 
 @router.post("/push-token")
@@ -204,10 +191,7 @@ def save_push_token(
     except Exception as e:
         logger.error(f"Push token error: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Could not save push token"
-        )
+        raise HTTPException(status_code=500, detail="Could not save push token")
 
 
 @router.put("/profile")
@@ -224,15 +208,11 @@ def update_profile(
         if location is not None:
             user.location = location
         db.commit()
-        logger.info(f"Profile updated for user {user.id}")
         return {"status": "ok", "message": "Profile updated"}
     except Exception as e:
         logger.error(f"Profile update error: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Could not update profile"
-        )
+        raise HTTPException(status_code=500, detail="Could not update profile")
 
 
 @router.post("/logout")
@@ -240,3 +220,58 @@ def logout(user: User = Depends(get_current_user)):
     """Logout — client should delete the token."""
     logger.info(f"User logged out: {user.username}")
     return {"message": "Logged out successfully"}
+
+
+@router.delete("/delete-account")
+def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete the user's account and all associated data."""
+    try:
+        from app.models.performance_log import PerformanceLog
+
+        # Delete performance logs
+        db.query(PerformanceLog).filter(
+            PerformanceLog.user_id == current_user.id
+        ).delete()
+
+        # Delete gamification profile
+        try:
+            from app.models.gamification import UserGameProfile
+            db.query(UserGameProfile).filter(
+                UserGameProfile.user_id == current_user.id
+            ).delete()
+        except Exception:
+            pass
+
+        # Delete athlete links
+        try:
+            from app.models.athlete_link import AthleteLink
+            db.query(AthleteLink).filter(
+                (AthleteLink.coach_id == current_user.id) |
+                (AthleteLink.athlete_id == current_user.id)
+            ).delete()
+        except Exception:
+            pass
+
+        # Delete subscription
+        try:
+            if Subscription:
+                db.query(Subscription).filter(
+                    Subscription.user_id == current_user.id
+                ).delete()
+        except Exception:
+            pass
+
+        # Delete the user
+        db.delete(current_user)
+        db.commit()
+
+        logger.info(f"Account deleted for user {current_user.id}")
+        return {"status": "deleted", "message": "Account permanently deleted"}
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Delete account error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
