@@ -21,7 +21,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "levelup-secret-key")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "43200"))
+# 1 year expiry — keeps users signed in permanently
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "525600"))
 
 # Safe subscription import
 try:
@@ -114,7 +115,7 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    """Login and return access token."""
+    """Login and return a long-lived access token."""
     try:
         user = db.query(User).filter(User.username == form_data.username).first()
 
@@ -186,10 +187,8 @@ def save_push_token(
     try:
         user.device_token = request.token
         db.commit()
-        logger.info(f"Push token saved for user {user.id}")
         return {"status": "ok", "message": "Push token saved"}
     except Exception as e:
-        logger.error(f"Push token error: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(status_code=500, detail="Could not save push token")
 
@@ -210,7 +209,6 @@ def update_profile(
         db.commit()
         return {"status": "ok", "message": "Profile updated"}
     except Exception as e:
-        logger.error(f"Profile update error: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(status_code=500, detail="Could not update profile")
 
@@ -231,12 +229,10 @@ def delete_account(
     try:
         from app.models.performance_log import PerformanceLog
 
-        # Delete performance logs
         db.query(PerformanceLog).filter(
             PerformanceLog.user_id == current_user.id
         ).delete()
 
-        # Delete gamification profile
         try:
             from app.models.gamification import UserGameProfile
             db.query(UserGameProfile).filter(
@@ -245,17 +241,6 @@ def delete_account(
         except Exception:
             pass
 
-        # Delete athlete links
-        try:
-            from app.models.athlete_link import AthleteLink
-            db.query(AthleteLink).filter(
-                (AthleteLink.coach_id == current_user.id) |
-                (AthleteLink.athlete_id == current_user.id)
-            ).delete()
-        except Exception:
-            pass
-
-        # Delete subscription
         try:
             if Subscription:
                 db.query(Subscription).filter(
@@ -264,7 +249,6 @@ def delete_account(
         except Exception:
             pass
 
-        # Delete the user
         db.delete(current_user)
         db.commit()
 

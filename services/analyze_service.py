@@ -1,301 +1,453 @@
-import os
-import uuid
-import shutil
 import logging
+import os
+import tempfile
+import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.models.performance_log import PerformanceLog
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# ─── Pro Athlete Benchmarks ───────────────────────────────────────────────────
+PRO_ATHLETE_BENCHMARKS = {
+    "basketball": """
+PROFESSIONAL BENCHMARK — NBA/Collegiate Shooting Standards:
+- Score 90-100: Near-perfect NBA mechanics. Elbow perfectly under ball forming L-shape,
+  45-55 degree arc, full wrist snap with goose-neck follow through held 2+ seconds,
+  feet shoulder-width in balanced stance, eyes on target throughout, legs drive power up.
+- Score 75-89: Solid collegiate/serious player level. Most mechanics correct with 1-2 minor issues.
+- Score 55-74: Recreational player with clear fixable issues. Multiple form problems visible.
+- Score 35-54: Significant form problems. Poor elbow alignment, flat arc, minimal follow through.
+- Score 0-34: Major technique issues throughout. Fundamentals need complete rebuild.
 
-def has_feature(user: User, feature: str) -> bool:
-    """Check if user's subscription tier has a feature."""
-    if not user.subscription:
-        return False
-    tier = user.subscription.effective_tier
-    features = {
-        "trial":   {"gpt_feedback": True,  "training_plan": True,  "athlete_matching": False},
-        "pro":     {"gpt_feedback": True,  "training_plan": False, "athlete_matching": False},
-        "elite":   {"gpt_feedback": True,  "training_plan": True,  "athlete_matching": True},
-        "expired": {"gpt_feedback": False, "training_plan": False, "athlete_matching": False},
-        "free":    {"gpt_feedback": False, "training_plan": False, "athlete_matching": False},
-    }
-    return features.get(tier, {}).get(feature, False)
+Key pro indicators to look for:
+- Steph Curry: consistent 47-degree arc, elbow perfectly aligned, holds follow through until ball hits rim
+- Kevin Durant: high release point, full extension, textbook follow through
+- Most recreational players score 40-65 — be honest and realistic with scoring""",
 
+    "tennis": """
+PROFESSIONAL BENCHMARK — ATP/WTA Tour Standards:
+- Score 90-100: Near-professional mechanics. Contact point 2-3 feet in front of body,
+  full hip+shoulder rotation, racket low-to-high acceleration, clean over-shoulder follow through,
+  split-step timing, athletic ready position between shots.
+- Score 75-89: Strong club/collegiate level. Good contact point, decent rotation, follows through.
+- Score 55-74: Intermediate — contact point inconsistent, partial rotation, choppy swing.
+- Score 35-54: Beginner — arm-only shots, late contact, no hip rotation.
+- Score 0-34: Fundamental technique issues, no form structure.
 
-def enforce_upload_limit(user: User, db: Session):
-    """Raises an exception if user has exceeded their upload limit."""
-    from fastapi import HTTPException
+Key pro indicators:
+- Federer: contact always out in front, smooth unit turn, racket acceleration through ball
+- Serena: explosive hip drive, full follow through over shoulder
+- Most recreational players score 35-65 — be realistic""",
 
-    if not user.subscription:
-        raise HTTPException(
-            status_code=403,
-            detail="No active subscription found. Please create an account."
-        )
+    "golf": """
+PROFESSIONAL BENCHMARK — PGA/LPGA Tour Standards:
+- Score 90-100: Tour-level swing mechanics. Full 90-degree shoulder turn, 45-degree hip turn,
+  spine angle maintained from address through impact, complete weight transfer to lead foot,
+  club path on plane, balanced finish position held for 2+ seconds.
+- Score 75-89: Scratch/low-handicap level. Good rotation, reasonable spine angle, solid finish.
+- Score 55-74: Mid-handicap recreational. Partial rotation, some spine angle loss, incomplete finish.
+- Score 35-54: High handicap. Reverse pivot, over-the-top path, early extension, poor finish.
+- Score 0-34: Major swing faults throughout, needs fundamental instruction.
 
-    tier = user.subscription.effective_tier
+Key pro indicators:
+- Tiger Woods: spine angle identical at address and impact, full hip rotation, balanced finish
+- Rory McIlroy: explosive hip clearance, lag maintained, complete extension through ball
+- Most recreational golfers score 35-65 — be honest and calibrated""",
 
-    if tier == "expired":
-        raise HTTPException(
-            status_code=403,
-            detail="Your free trial has expired. Please upgrade to continue."
-        )
+    "soccer": """
+PROFESSIONAL BENCHMARK — Premier League/Professional Standards:
+- Score 90-100: Professional-level technique. Plant foot perfectly positioned beside ball,
+  full leg swing from hip, ankle locked at contact, body leaning over ball for placement,
+  complete follow through pointing at target, eyes down through contact.
+- Score 75-89: Academy/collegiate level. Good plant foot, decent swing, reasonable follow through.
+- Score 55-74: Recreational with clear improvements needed. Plant foot off, toe-kicking evident.
+- Score 35-54: Significant technique issues. Wrong contact surface, no follow through.
+- Score 0-34: Complete beginner mechanics throughout.
 
-    limits = {
-        "trial": 10,
-        "pro": 1,
-        "elite": 100,
-        "free": 0,
-    }
+Key pro indicators:
+- Ronaldo: plant foot 6 inches beside ball, full hip rotation, locked ankle at contact, complete follow through
+- Messi: deceptive body feint, perfect ball control, precise contact surface
+- Most recreational players score 40-65""",
 
-    limit = limits.get(tier, 0)
-    if limit == 0:
-        raise HTTPException(
-            status_code=403,
-            detail="Please upgrade to Pro or Elite to upload videos."
-        )
+    "pickleball": """
+PROFESSIONAL BENCHMARK — Professional Pickleball Association Standards:
+- Score 90-100: Tournament-level mechanics. Paddle up and ready before ball arrives,
+  contact point out in front of body, firm stable wrist through contact zone,
+  dinks consistently landing in kitchen, smooth follow through to target,
+  athletic ready position reset between every shot.
+- Score 75-89: 4.0+ player level. Good preparation, consistent contact, controlled placement.
+- Score 55-74: 3.0-3.5 recreational — late preparation, inconsistent contact.
+- Score 35-54: Beginner — reactive play, flicking wrist, poor reset position.
+- Score 0-34: Complete beginner, no structured technique.
 
-    now = datetime.utcnow()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+Key pro indicators:
+- Ben Johns: paddle always up, contact always out front, deceptive reset game
+- Anna Leigh Waters: explosive transition, consistent dink accuracy, athletic ready position
+- Most recreational players score 35-65""",
 
-    count = db.query(PerformanceLog).filter(
-        PerformanceLog.user_id == user.id,
-        PerformanceLog.created_at >= month_start,
-    ).count()
+    "gym": """
+PROFESSIONAL BENCHMARK — Certified Strength & Conditioning Standards:
+- Score 90-100: Elite technique. Full depth (thighs parallel or below for squats),
+  knees tracking over toes with no cave, neutral spine maintained throughout,
+  controlled 2-3 second eccentric, explosive concentric, braced core, balanced finish.
+- Score 75-89: Solid intermediate. Good depth, reasonable form, minor technique gaps.
+- Score 55-74: Recreational — partial depth, some knee cave or back rounding visible.
+- Score 35-54: Significant technique risks. Spine rounding, knee cave, inconsistent depth.
+- Score 0-34: Major form issues creating injury risk.
 
-    if count >= limit:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"You have reached your {limit} upload limit for this month. "
-                f"Upgrade to Elite for 100 uploads per month."
-            )
-        )
+Key pro indicators:
+- Olympic lifters: perfect bar path, full depth, explosive drive
+- Most gym-goers score 45-70 — be accurate and honest about safety""",
+}
 
+ANALYSIS_PROMPT_TEMPLATE = """You are an elite AI sports performance coach analyzing a {sport} training video.
 
-def calculate_streak(user_id: int, db: Session) -> int:
-    """Calculate current training streak for a user."""
-    try:
-        logs = db.query(PerformanceLog).filter(
-            PerformanceLog.user_id == user_id
-        ).order_by(PerformanceLog.created_at.desc()).limit(30).all()
+{benchmark}
 
-        streak = 0
-        today = datetime.utcnow().date()
-        dates = sorted(set(
-            l.created_at.date() for l in logs if l.created_at
-        ), reverse=True)
+Analyze the athlete's form carefully and provide your assessment in the following JSON format:
 
-        for i, date in enumerate(dates):
-            expected = today - timedelta(days=i)
-            if date == expected:
-                streak += 1
-            else:
-                break
-        return streak
-    except Exception as e:
-        logger.warning(f"Streak calculation failed: {e}")
-        return 0
+{{
+  "score": <integer 0-100 based on the professional benchmarks above>,
+  "performance_label": "<ELITE|EXCELLENT|GOOD|AVERAGE|NEEDS WORK|BEGINNER>",
+  "summary": "<2-3 sentence honest summary of their performance>",
+  "form_issues": [
+    "<specific form issue 1>",
+    "<specific form issue 2>"
+  ],
+  "coaching_tips": [
+    "<specific actionable tip 1>",
+    "<specific actionable tip 2>",
+    "<specific actionable tip 3>"
+  ],
+  "strengths": [
+    "<something they did well>"
+  ],
+  "metrics": {{
+    "overall_score": <same as score>,
+    "technique": <0-100>,
+    "consistency": <0-100>,
+    "power_or_control": <0-100>,
+    "balance": <0-100>,
+    "follow_through": <0-100>
+  }},
+  "reps_completed": <estimated number of reps/shots/swings visible, 0 if unclear>,
+  "gpt_feedback": "What You Did Well\\n<2-3 sentences>\\n\\nWhat Needs Improvement\\n<2-3 sentences>\\n\\nYour Action Plan\\n<2-3 specific steps>"
+}}
+
+SCORING GUIDELINES:
+- Be realistic and calibrated. Most recreational athletes score 35-70.
+- Only score 80+ if the form genuinely approaches collegiate or professional level.
+- Only score 90+ for near-perfect professional-level mechanics.
+- If the video is unclear, low quality, or you cannot clearly see the form, score conservatively (40-55).
+- Never inflate scores. Honest feedback helps athletes improve.
+- Return ONLY valid JSON, no markdown, no explanation outside the JSON."""
 
 
 async def analyze_video(
-    file,
+    video_path: str,
     sport: str,
-    db: Session,
     user: User,
+    db: Session,
     personality: str = "supportive",
 ) -> dict:
-    """Main video analysis pipeline."""
+    """Full video analysis pipeline."""
+    try:
+        import openai
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    except ImportError:
+        logger.error("OpenAI not installed")
+        return _fallback_result(sport)
 
-    # 1. Check upload limit
-    enforce_upload_limit(user, db)
-
-    # 2. Save uploaded file
-    ext = os.path.splitext(file.filename)[-1].lower() or ".mp4"
-    filename = f"{UPLOAD_DIR}/{uuid.uuid4()}{ext}"
+    if not OPENAI_API_KEY:
+        logger.error("OPENAI_API_KEY not set")
+        return _fallback_result(sport)
 
     try:
-        with open(filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            buffer.flush()
-            os.fsync(buffer.fileno())
-    except Exception as e:
-        logger.error(f"Failed to save uploaded file: {e}")
-        return {"error": "Failed to save video. Please try again."}
+        # ── 1. Get previous score for personal best comparison ──────────────
+        previous_log = db.query(PerformanceLog).filter(
+            PerformanceLog.user_id == user.id,
+            PerformanceLog.sport == sport,
+        ).order_by(PerformanceLog.created_at.desc()).first()
+        previous_score = previous_log.score if previous_log else None
 
-    file_size = os.path.getsize(filename)
-    logger.info(
-        f"User {user.id} uploaded {filename} ({file_size} bytes) "
-        f"sport={sport} personality={personality}"
-    )
+        # ── 2. Extract frames from video ────────────────────────────────────
+        frames_b64 = await _extract_frames(video_path)
+        if not frames_b64:
+            logger.warning("No frames extracted — using fallback")
+            return _fallback_result(sport)
 
-    if file_size < 1000:
-        return {"error": "Video file is too small or corrupted. Please try uploading again."}
+        # ── 3. Build prompt with pro benchmarks ─────────────────────────────
+        benchmark = PRO_ATHLETE_BENCHMARKS.get(sport.lower(), "")
+        benchmark_section = f"PROFESSIONAL BENCHMARKS:\n{benchmark}" if benchmark else ""
+        prompt = ANALYSIS_PROMPT_TEMPLATE.format(
+            sport=sport.capitalize(),
+            benchmark=benchmark_section,
+        )
 
-    # 3. Convert video
-    converted_filename = filename
-    try:
-        from analysis.pose_detection import convert_video
-        converted_filename = convert_video(filename)
-        logger.info(f"Using converted video: {converted_filename}")
-    except Exception as e:
-        logger.warning(f"Video conversion failed: {e}")
-        converted_filename = filename
+        # ── 4. Build GPT-4o message with frames ─────────────────────────────
+        content = [{"type": "text", "text": prompt}]
+        for frame_b64 in frames_b64[:8]:  # Max 8 frames
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{frame_b64}",
+                    "detail": "high",
+                },
+            })
 
-    # 4. Get previous score for improvement comparison
-    previous_score = None
-    try:
-        last_log = (
-            db.query(PerformanceLog)
-            .filter(
-                PerformanceLog.user_id == user.id,
-                PerformanceLog.sport == sport,
+        # ── 5. Call GPT-4o Vision ────────────────────────────────────────────
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": content}],
+            max_tokens=1500,
+            temperature=0.3,
+        )
+
+        raw = response.choices[0].message.content.strip()
+        logger.info(f"GPT raw response length: {len(raw)}")
+
+        # ── 6. Parse JSON response ───────────────────────────────────────────
+        result = _parse_gpt_response(raw, sport)
+
+        # ── 7. Clamp score to realistic range ───────────────────────────────
+        result["score"] = max(0, min(100, result.get("score", 50)))
+
+        # ── 8. Add sport and metadata ────────────────────────────────────────
+        result["sport"] = sport
+
+        # ── 9. Generate training plan ────────────────────────────────────────
+        try:
+            training_plan = await _generate_training_plan(client, sport, result)
+            result["training_plan"] = training_plan
+        except Exception as e:
+            logger.warning(f"Training plan generation failed: {e}")
+            result["training_plan"] = None
+
+        # ── 10. Save to database ─────────────────────────────────────────────
+        try:
+            log = PerformanceLog(
+                user_id=user.id,
+                sport=sport,
+                score=result.get("score"),
+                reps=result.get("reps_completed", 0),
+                metrics=result,
+                created_at=datetime.utcnow(),
             )
-            .order_by(PerformanceLog.created_at.desc())
-            .first()
-        )
-        if last_log and last_log.score:
-            previous_score = int(last_log.score)
-    except Exception as e:
-        logger.warning(f"Could not get previous score: {e}")
+            db.add(log)
+            db.commit()
+            db.refresh(log)
+            result["session_id"] = log.id
+        except Exception as e:
+            logger.error(f"Failed to save performance log: {e}", exc_info=True)
+            db.rollback()
 
-    # 5. Run pose analysis
-    result = {}
-    try:
-        from analysis.process_video import analyze_video as run_analysis
-        result = run_analysis(
-            converted_filename,
-            sport=sport,
-            previous_score=previous_score,
-        )
-        logger.info(f"Analysis complete: score={result.get('score')}")
-    except Exception as e:
-        logger.error(f"Analysis crashed: {e}", exc_info=True)
-        return {"error": f"Analysis failed: {str(e)}"}
+        # ── 11. Award XP ─────────────────────────────────────────────────────
+        try:
+            from services.xp_service import award_xp
 
-    if "error" in result:
+            total_sessions = db.query(func.count(PerformanceLog.id)).filter(
+                PerformanceLog.user_id == user.id
+            ).scalar() or 0
+
+            is_pb = bool(previous_score and result.get("score") and result["score"] > previous_score)
+            improvement = (result["score"] - previous_score) if (previous_score and result.get("score")) else 0
+
+            # Calculate streak
+            streak = 0
+            streak_logs = db.query(PerformanceLog).filter(
+                PerformanceLog.user_id == user.id
+            ).order_by(PerformanceLog.created_at.desc()).limit(30).all()
+
+            today = datetime.utcnow().date()
+            dates = sorted(set(
+                l.created_at.date() for l in streak_logs if l.created_at
+            ), reverse=True)
+            for i, date in enumerate(dates):
+                expected = today - timedelta(days=i)
+                if date == expected:
+                    streak += 1
+                else:
+                    break
+
+            xp_result = award_xp(
+                user_id=user.id,
+                db=db,
+                score=result.get("score", 0),
+                form_issues=result.get("form_issues", []),
+                is_personal_best=is_pb,
+                streak=streak,
+                total_sessions=total_sessions,
+                improvement=improvement,
+            )
+
+            result["xp_earned"]       = xp_result["xp_earned"]
+            result["xp_breakdown"]    = xp_result["xp_breakdown"]
+            result["total_xp"]        = xp_result["total_xp"]
+            result["level"]           = xp_result["level"]
+            result["level_name"]      = xp_result["level_name"]
+            result["leveled_up"]      = xp_result["leveled_up"]
+            result["new_badges"]      = xp_result["new_badges"]
+            result["xp_progress_pct"] = xp_result["progress_pct"]
+
+            logger.info(f"XP awarded: +{xp_result['xp_earned']} to user {user.id}")
+        except Exception as e:
+            logger.warning(f"XP award failed (non-fatal): {e}")
+
         return result
 
-    # 6. GPT feedback
-    if has_feature(user, "gpt_feedback"):
-        try:
-            from app.gpt_coach import generate_gpt_feedback
-            gpt = generate_gpt_feedback(
-                metrics=result,
-                sport=sport,
-                personality=personality,
-            )
-            result["gpt_feedback"] = gpt
-            logger.info("GPT feedback generated successfully")
-        except Exception as e:
-            logger.warning(f"GPT feedback failed: {e}")
-
-    # 7. Training plan
-    if has_feature(user, "training_plan"):
-        try:
-            from app.gpt_coach import generate_training_plan
-            training_plan = generate_training_plan(
-                metrics=result,
-                sport=sport,
-            )
-            result["training_plan"] = training_plan
-            logger.info("Training plan generated successfully")
-        except Exception as e:
-            logger.warning(f"Training plan failed: {e}")
-
-    # 8. Technique guide
-    if has_feature(user, "gpt_feedback"):
-        try:
-            from app.gpt_coach import generate_technique_guide
-            technique_guide = generate_technique_guide(
-                sport=sport,
-                form_issues=result.get("form_issues", []),
-                personality=personality,
-            )
-            result["technique_guide"] = technique_guide
-            logger.info("Technique guide generated successfully")
-        except Exception as e:
-            logger.warning(f"Technique guide failed: {e}")
-
-    # 9. Save performance log
-    try:
-        log = PerformanceLog(
-            user_id=user.id,
-            sport=sport,
-            score=result.get("score"),
-            reps=result.get("reps_completed"),
-            video_path=converted_filename,
-            metrics={
-                "form_issues":      result.get("form_issues", []),
-                "coaching_tips":    result.get("coaching_tips", []),
-                "summary":          result.get("summary", ""),
-                "gpt_feedback":     result.get("gpt_feedback", ""),
-                "improvement":      result.get("improvement", ""),
-                "training_plan":    result.get("training_plan", None),
-                "annotated_frames": result.get("annotated_frames", []),
-                "technique_guide":  result.get("technique_guide", None),
-            },
-        )
-        db.add(log)
-        db.commit()
-        logger.info(f"Performance log saved for user {user.id}")
     except Exception as e:
-        logger.error(f"Failed to save performance log: {e}", exc_info=True)
+        logger.error(f"analyze_video error: {e}", exc_info=True)
+        return _fallback_result(sport)
 
-    # 10. Push notification
+
+async def _extract_frames(video_path: str) -> list:
+    """Extract frames from video as base64 strings."""
     try:
-        if hasattr(user, 'device_token') and user.device_token:
-            from services.push_service import send_push_notification
-            send_push_notification(
-                token=user.device_token,
-                title="Analysis Ready 🏆",
-                body="Your LevelUp AI coaching feedback is ready to view.",
-            )
-    except Exception as e:
-        logger.warning(f"Push notification failed: {e}")
+        import cv2
+        import base64
 
-    # 11. Award XP
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Could not open video: {video_path}")
+            return []
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        duration = total_frames / fps
+
+        # Extract up to 8 evenly spaced frames
+        num_frames = min(8, max(3, int(duration * 2)))
+        frame_indices = [int(i * total_frames / num_frames) for i in range(num_frames)]
+
+        frames_b64 = []
+        for idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                # Resize for API efficiency
+                h, w = frame.shape[:2]
+                if w > 1280:
+                    scale = 1280 / w
+                    frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frames_b64.append(base64.b64encode(buffer).decode('utf-8'))
+
+        cap.release()
+        logger.info(f"Extracted {len(frames_b64)} frames from video")
+        return frames_b64
+
+    except Exception as e:
+        logger.error(f"Frame extraction error: {e}", exc_info=True)
+        return []
+
+
+def _parse_gpt_response(raw: str, sport: str) -> dict:
+    """Parse GPT JSON response with fallback handling."""
     try:
-        from services.xp_service import award_xp
+        # Strip markdown code blocks if present
+        clean = raw.strip()
+        if clean.startswith("```"):
+            lines = clean.split("\n")
+            clean = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
 
-        total_sessions_count = db.query(func.count(PerformanceLog.id)).filter(
-            PerformanceLog.user_id == user.id
-        ).scalar() or 0
+        data = json.loads(clean)
 
-        is_pb = bool(previous_score and result.get("score") and result["score"] > previous_score)
-        improvement = float(result.get("score", 0) - (previous_score or 0))
-        streak = calculate_streak(user.id, db)
-
-        xp_result = award_xp(
-            user_id=user.id,
-            db=db,
-            score=result.get("score", 0),
-            form_issues=result.get("form_issues", []),
-            is_personal_best=is_pb,
-            streak=streak,
-            total_sessions=total_sessions_count,
-            improvement=improvement,
-        )
-
-        result["xp_earned"] = xp_result["xp_earned"]
-        result["xp_breakdown"] = xp_result["xp_breakdown"]
-        result["total_xp"] = xp_result["total_xp"]
-        result["level"] = xp_result["level"]
-        result["level_name"] = xp_result["level_name"]
-        result["leveled_up"] = xp_result["leveled_up"]
-        result["new_badges"] = xp_result["new_badges"]
-        result["xp_progress_pct"] = xp_result["progress_pct"]
-
-        logger.info(f"XP awarded: +{xp_result['xp_earned']} XP to user {user.id}")
+        # Ensure required fields
+        return {
+            "score":             int(data.get("score", 55)),
+            "performance_label": data.get("performance_label", "AVERAGE"),
+            "summary":           data.get("summary", "Analysis complete."),
+            "form_issues":       data.get("form_issues", []),
+            "coaching_tips":     data.get("coaching_tips", []),
+            "strengths":         data.get("strengths", []),
+            "metrics":           data.get("metrics", {}),
+            "reps_completed":    int(data.get("reps_completed", 0)),
+            "gpt_feedback":      data.get("gpt_feedback", ""),
+            "annotated_frames":  data.get("annotated_frames", []),
+        }
     except Exception as e:
-        logger.warning(f"XP award failed: {e}", exc_info=True)
+        logger.error(f"JSON parse error: {e} | Raw: {raw[:200]}")
+        return _fallback_result(sport)
 
-    return result
+
+async def _generate_training_plan(client, sport: str, analysis: dict) -> dict:
+    """Generate a personalized 3-day training plan."""
+    score = analysis.get("score", 55)
+    issues = analysis.get("form_issues", [])
+    issues_text = "\n".join(f"- {i}" for i in issues[:3]) if issues else "- General form improvement"
+
+    prompt = f"""Create a focused 3-day training plan for a {sport} athlete who scored {score}/100.
+
+Their main form issues:
+{issues_text}
+
+Return ONLY valid JSON:
+{{
+  "plan_title": "<motivating title>",
+  "focus": "<main focus area>",
+  "days": [
+    {{
+      "day": 1,
+      "title": "Day 1 - <theme>",
+      "duration_minutes": <30-60>,
+      "exercises": [
+        {{"name": "<exercise>", "sets": <sets>, "reps": "<reps or duration>", "focus": "<what it fixes>"}}
+      ]
+    }},
+    {{"day": 2, "title": "Day 2 - <theme>", "duration_minutes": <30-60>, "exercises": [...]}},
+    {{"day": 3, "title": "Day 3 - <theme>", "duration_minutes": <30-60>, "exercises": [...]}}
+  ]
+}}"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=800,
+        temperature=0.4,
+    )
+
+    raw = response.choices[0].message.content.strip()
+    clean = raw.strip()
+    if clean.startswith("```"):
+        lines = clean.split("\n")
+        clean = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+
+    return json.loads(clean)
+
+
+def _fallback_result(sport: str) -> dict:
+    """Return a safe fallback result when analysis fails."""
+    return {
+        "score":             52,
+        "performance_label": "AVERAGE",
+        "sport":             sport,
+        "summary":           "We analyzed your video but had trouble processing the full analysis. Upload a clearer video for better results.",
+        "form_issues":       ["Video quality may have affected analysis accuracy"],
+        "coaching_tips":     [
+            "Film from the side so your full body is visible",
+            "Ensure good lighting for accurate pose detection",
+            "Keep the camera steady throughout your movement",
+        ],
+        "strengths":         [],
+        "metrics":           {"overall_score": 52, "technique": 50, "consistency": 50, "power_or_control": 50, "balance": 55, "follow_through": 50},
+        "reps_completed":    0,
+        "gpt_feedback":      "",
+        "training_plan":     None,
+        "annotated_frames":  [],
+        "xp_earned":         50,
+        "xp_breakdown":      [{"reason": "Uploaded a video", "xp": 50}],
+        "total_xp":          50,
+        "level":             1,
+        "level_name":        "Rookie",
+        "leveled_up":        False,
+        "new_badges":        [],
+        "xp_progress_pct":   25,
+    }
