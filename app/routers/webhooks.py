@@ -14,8 +14,8 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
 def get_tier_by_price_id(price_id: str) -> str:
-    pro_price = os.getenv("STRIPE_PRICE_ID_PRO", "")
-    elite_price = os.getenv("STRIPE_PRICE_ID_ELITE", "")
+    PRO_PRICE_ID   = os.getenv("STRIPE_PRICE_ID_PRO")
+    ELITE_PRICE_ID = os.getenv("STRIPE_PRICE_ID_ELITE")
     if price_id == pro_price:
         return "pro"
     if price_id == elite_price:
