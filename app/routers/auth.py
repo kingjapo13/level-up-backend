@@ -21,10 +21,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "levelup-secret-key")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-# 1 year expiry — keeps users signed in permanently
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "525600"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "525600"))  # 1 year
 
-# Safe subscription import
 try:
     from app.models.subscription import Subscription
 except ImportError:
@@ -62,19 +60,11 @@ def create_access_token(data: dict) -> str:
 
 @router.post("/register")
 def register(request: RegisterRequest, db: Session = Depends(get_db)):
-    """Register a new user with a 7-day free trial."""
     try:
         if db.query(User).filter(User.username == request.username).first():
-            raise HTTPException(
-                status_code=400,
-                detail="Username already taken. Please choose a different one."
-            )
-
+            raise HTTPException(status_code=400, detail="Username already taken.")
         if db.query(User).filter(User.email == request.email).first():
-            raise HTTPException(
-                status_code=400,
-                detail="An account with this email already exists."
-            )
+            raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
         user = User(
             username=request.username,
@@ -96,11 +86,7 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
 
         db.commit()
         logger.info(f"New user registered: {request.username}")
-
-        return {
-            "message": "Account created! Your 7-day free trial has started.",
-            "username": user.username,
-        }
+        return {"message": "Account created! Your 7-day free trial has started.", "username": user.username}
 
     except HTTPException:
         raise
@@ -115,25 +101,17 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    """Login and return a long-lived access token."""
     try:
         user = db.query(User).filter(User.username == form_data.username).first()
-
         if not user or not verify_password(form_data.password, user.hashed_password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-
         token = create_access_token({"sub": user.username})
         logger.info(f"User logged in: {user.username}")
-
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "username": user.username,
-        }
+        return {"access_token": token, "token_type": "bearer", "username": user.username}
 
     except HTTPException:
         raise
@@ -143,16 +121,11 @@ def login(
 
 
 @router.get("/me")
-def get_me(
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Get current user profile and subscription info."""
+def get_me(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
         subscription = user.subscription
         tier = subscription.effective_tier if subscription else "free"
         trial_days = None
-        invite_code = getattr(user, 'invite_code', None)
 
         if subscription and subscription.tier == "trial" and subscription.trial_end:
             days = (subscription.trial_end - datetime.utcnow()).days
@@ -169,9 +142,8 @@ def get_me(
             "device_token": getattr(user, 'device_token', None),
             "age": getattr(user, 'age', None),
             "location": getattr(user, 'location', None),
-            "invite_code": invite_code,
+            "invite_code": getattr(user, 'invite_code', None),
         }
-
     except Exception as e:
         logger.error(f"Get me error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Could not fetch user profile: {str(e)}")
@@ -183,39 +155,17 @@ def save_push_token(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Save Expo push notification token."""
     try:
         user.device_token = request.token
         db.commit()
-        return {"status": "ok", "message": "Push token saved"}
+        return {"status": "ok"}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail="Could not save push token")
 
 
-@router.put("/profile")
-def update_profile(
-    age: int = None,
-    location: str = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Update user profile fields."""
-    try:
-        if age is not None:
-            user.age = age
-        if location is not None:
-            user.location = location
-        db.commit()
-        return {"status": "ok", "message": "Profile updated"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Could not update profile")
-
-
 @router.post("/logout")
 def logout(user: User = Depends(get_current_user)):
-    """Logout — client should delete the token."""
     logger.info(f"User logged out: {user.username}")
     return {"message": "Logged out successfully"}
 
@@ -225,33 +175,24 @@ def delete_account(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Permanently delete the user's account and all associated data."""
     try:
         from app.models.performance_log import PerformanceLog
-
-        db.query(PerformanceLog).filter(
-            PerformanceLog.user_id == current_user.id
-        ).delete()
+        db.query(PerformanceLog).filter(PerformanceLog.user_id == current_user.id).delete()
 
         try:
             from app.models.gamification import UserGameProfile
-            db.query(UserGameProfile).filter(
-                UserGameProfile.user_id == current_user.id
-            ).delete()
+            db.query(UserGameProfile).filter(UserGameProfile.user_id == current_user.id).delete()
         except Exception:
             pass
 
         try:
             if Subscription:
-                db.query(Subscription).filter(
-                    Subscription.user_id == current_user.id
-                ).delete()
+                db.query(Subscription).filter(Subscription.user_id == current_user.id).delete()
         except Exception:
             pass
 
         db.delete(current_user)
         db.commit()
-
         logger.info(f"Account deleted for user {current_user.id}")
         return {"status": "deleted", "message": "Account permanently deleted"}
 
